@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lygre
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lygre"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/lygre
+      PYTHONUNBUFFERED: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install backend deps
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do pg_isready -h localhost -p 5432 && break || sleep 1; done
+
+      - name: Run Alembic migrations (integration)
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          alembic upgrade head
+
+      - name: Run backend tests
+        working-directory: backend
+        run: |
+          PYTHONPATH=. pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: |
+          npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm run build
+
+      - name: Docker build (images)
+        run: |
+          docker build -t lygre-backend backend
+          docker build -t lygre-frontend frontend
+
+      - name: Start services with docker compose
+        run: |
+          docker compose up -d
+          sleep 5
+
+      - name: Smoke tests
+        env:
+          TOKEN: ${{ steps.login_token.outputs.token }}
+        run: |
+          # health
+          curl -f http://localhost:8000/api/v1/health
+          # login
+          LOGIN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@lygre.local","password":"Admin123!"}')
+          echo "$LOGIN"
+          ACCESS=$(echo "$LOGIN" | jq -r .access_token)
+          if [ "$ACCESS" = "null" ] || [ -z "$ACCESS" ]; then
+            echo "Login failed" && exit 1
+          fi
+          # create customer
+          curl -s -X POST http://localhost:8000/api/v1/customers -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' -d '{"customer_number":"C-999","name":"CI Test","phone":"+420111222333"}' | jq -r .
+          # import test PDF
+          curl -s -X POST http://localhost:8000/api/v1/uploads/pdf -H "Authorization: Bearer $ACCESS" -F "file=@backend/test_11.pdf" | jq -r .
+          # create manual job
+          JOB=$(curl -s -X POST http://localhost:8000/api/v1/jobs -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' -d '{"job_number":"CI-1","customer_name":"CI","status":"new","priority":"medium"}')
+          echo "$JOB"
+          JID=$(echo "$JOB" | jq -r .id)
+          if [ -z "$JID" ] || [ "$JID" = "null" ]; then
+            echo "Job create failed" && exit 1
+          fi
+          # job detail
+          curl -f -H "Authorization: Bearer $ACCESS" http://localhost:8000/api/v1/jobs/$JID/detail
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
