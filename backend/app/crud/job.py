@@ -1,0 +1,206 @@
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import Session
+
+from app.models.audit_log import AuditLog
+from app.models.job import Job
+from app.models.upload import Upload
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+VALID_STATUSES = {"new", "scheduled", "done", "cancelled"}
+VALID_SORT_FIELDS = {"job_number", "customer_name", "installation_date", "created_at", "updated_at"}
+VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
+
+
+def _apply_filters(
+    query,
+    *,
+    status: str | None,
+    priority: str | None,
+    technician: str | None,
+    customer: str | None,
+    installation_date_from: datetime | None,
+    installation_date_to: datetime | None,
+    search: str | None,
+):
+    filters = [Job.is_deleted.is_(False)]
+
+    if status:
+        filters.append(Job.status == status)
+    if priority:
+        normalized_priority = priority.strip().lower()
+        if normalized_priority in VALID_PRIORITIES:
+            filters.append(Job.priority == normalized_priority)
+    if technician:
+        filters.append(Job.technician.ilike(f"%{technician}%"))
+    if customer:
+        filters.append(Job.customer_name.ilike(f"%{customer}%"))
+    if installation_date_from:
+        filters.append(Job.installation_date >= installation_date_from)
+    if installation_date_to:
+        filters.append(Job.installation_date <= installation_date_to)
+    if search:
+        search_term = f"%{search.lower()}%"
+        filters.append(
+            or_(
+                Job.job_number.ilike(search_term),
+                Job.customer_name.ilike(search_term),
+                Job.street.ilike(search_term),
+                Job.city.ilike(search_term),
+                Job.company.ilike(search_term),
+                Job.notes.ilike(search_term),
+                Job.technician.ilike(search_term),
+            )
+        )
+
+    return query.where(and_(*filters))
+
+
+def get_jobs(
+    db: Session,
+    *,
+    skip: int = 0,
+    limit: int = 20,
+    status: str | None = None,
+    priority: str | None = None,
+    technician: str | None = None,
+    customer: str | None = None,
+    installation_date_from: datetime | None = None,
+    installation_date_to: datetime | None = None,
+    search: str | None = None,
+    sort_by: str = "created_at",
+    sort_desc: bool = True,
+) -> tuple[Sequence[Job], int]:
+    query = _apply_filters(
+        select(Job),
+        status=status,
+        priority=priority,
+        technician=technician,
+        customer=customer,
+        installation_date_from=installation_date_from,
+        installation_date_to=installation_date_to,
+        search=search,
+    )
+
+    if sort_by not in VALID_SORT_FIELDS:
+        sort_by = "created_at"
+    sort_column = getattr(Job, sort_by)
+    ordering = sort_column.desc() if sort_desc else sort_column.asc()
+
+    total_query = _apply_filters(
+        select(Job.id),
+        status=status,
+        priority=priority,
+        technician=technician,
+        customer=customer,
+        installation_date_from=installation_date_from,
+        installation_date_to=installation_date_to,
+        search=search,
+    )
+
+    total = db.scalar(select(func.count()).select_from(total_query.subquery()))
+    rows = db.scalars(query.order_by(ordering).offset(skip).limit(limit)).all()
+    return rows, total or 0
+
+
+def get_job_by_id(db: Session, job_id: int) -> Job | None:
+    return db.scalar(select(Job).where(Job.id == job_id, Job.is_deleted.is_(False)))
+
+
+def get_job_by_number(db: Session, job_number: str) -> Job | None:
+    return db.scalar(select(Job).where(Job.job_number == job_number, Job.is_deleted.is_(False)))
+
+
+def create_job(db: Session, job_data: dict[str, Any]) -> Job:
+    job = Job(**job_data)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def update_job(db: Session, job: Job, job_data: dict[str, Any]) -> Job:
+    for key, value in job_data.items():
+        setattr(job, key, value)
+    job.updated_at = utc_now()
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def delete_job(db: Session, job: Job) -> None:
+    job.is_deleted = True
+    job.updated_at = utc_now()
+    db.add(job)
+    db.commit()
+
+
+def get_dashboard_summary(db: Session) -> dict[str, Any]:
+    status_rows = db.execute(
+        select(Job.status, func.count(Job.id)).where(Job.is_deleted.is_(False)).group_by(Job.status)
+    ).all()
+    status_counts = {status: count for status, count in status_rows}
+
+    recent_jobs = db.scalars(
+        select(Job).where(Job.is_deleted.is_(False)).order_by(Job.created_at.desc()).limit(10)
+    ).all()
+
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    overdue_jobs = db.scalars(
+        select(Job)
+        .where(
+            Job.is_deleted.is_(False),
+            Job.installation_date.is_not(None),
+            Job.installation_date < today_start,
+            Job.status.not_in(["done", "cancelled"]),
+        )
+        .order_by(Job.installation_date.asc())
+        .limit(20)
+    ).all()
+
+    today_installations = db.scalars(
+        select(Job)
+        .where(
+            Job.is_deleted.is_(False),
+            Job.installation_date.is_not(None),
+            Job.installation_date >= today_start,
+            Job.installation_date <= today_end,
+        )
+        .order_by(Job.installation_date.asc())
+        .limit(20)
+    ).all()
+
+    return {
+        "status_counts": status_counts,
+        "recent_jobs": list(recent_jobs),
+        "overdue_jobs": list(overdue_jobs),
+        "today_installations": list(today_installations),
+    }
+
+
+def get_job_detail_data(db: Session, job_id: int) -> tuple[Job | None, list[Upload], list[AuditLog]]:
+    job = get_job_by_id(db, job_id)
+    if not job:
+        return None, [], []
+
+    attachments = db.scalars(
+        select(Upload)
+        .where(Upload.job_id == job_id)
+        .order_by(Upload.uploaded_at.desc())
+    ).all()
+    audit_logs = db.scalars(
+        select(AuditLog)
+        .where(AuditLog.entity_type == "job", AuditLog.entity_id == job_id)
+        .order_by(AuditLog.created_at.desc())
+    ).all()
+    return job, list(attachments), list(audit_logs)

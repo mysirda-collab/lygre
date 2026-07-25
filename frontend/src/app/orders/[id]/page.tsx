@@ -1,0 +1,172 @@
+'use client';
+
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+
+import { authFetch } from '@/lib/auth';
+
+type Job = {
+  id: number;
+  job_number: string;
+  status: string;
+  priority: string;
+  customer_name: string;
+  company?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  street?: string | null;
+  city?: string | null;
+  zip?: string | null;
+  installation_date?: string | null;
+  technician?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type JobDetailResponse = {
+  job: Job;
+  attachments: Array<{
+    id: number;
+    original_filename: string;
+    uploaded_at: string;
+    file_size: number;
+    status: string;
+  }>;
+  audit_logs: Array<{
+    id: number;
+    action: string;
+    details?: string | null;
+    created_at: string;
+  }>;
+};
+
+export default function OrderDetailPage() {
+  const params = useParams<{ id: string }>();
+  const [detail, setDetail] = useState<JobDetailResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadJob = async () => {
+      setLoading(true);
+      setError(null);
+
+      const response = await authFetch(`/api/v1/jobs/${params.id}/detail`);
+      if (!response.ok) {
+        setError('Zakazka nebyla nalezena.');
+        setLoading(false);
+        return;
+      }
+      const data = (await response.json()) as JobDetailResponse;
+      setDetail(data);
+      setLoading(false);
+    };
+    void loadJob();
+  }, [params.id]);
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-8">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Detail zakazky</h1>
+          <p className="mt-2 text-sm text-slate-500">Kompletni informace, historie a prilohy.</p>
+        </div>
+        <Link href="/orders" className="text-sm font-medium text-slate-700 underline-offset-2 hover:underline">
+          Zpet na seznam
+        </Link>
+      </div>
+
+      {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div> : null}
+
+      {loading ? (
+        <div className="grid gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-24 animate-pulse rounded-xl border border-slate-200 bg-white" />
+          ))}
+        </div>
+      ) : detail ? (
+        <div className="grid gap-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Cislo zakazky</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{detail.job.job_number}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Stav</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{detail.job.status}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Priorita</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">{detail.job.priority}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Zakaznik</p>
+                <p className="mt-1 text-slate-900">{detail.job.customer_name}</p>
+                <p className="text-slate-600">{detail.job.company || '-'}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Kontakt</p>
+                <p className="mt-1 text-slate-900">{detail.job.phone || '-'} · {detail.job.email || '-'}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Adresa</p>
+                <p className="mt-1 text-slate-900">{detail.job.street || '-'}<br />{[detail.job.city, detail.job.zip].filter(Boolean).join(' ') || '-'}</p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Technik</p>
+                <p className="mt-1 text-slate-900">{detail.job.technician || '-'}</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Poznamky</p>
+              <p className="mt-1 text-slate-900">{detail.job.notes || '-'}</p>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-3 text-lg font-semibold">Prilohy</h2>
+            {detail.attachments.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">Zakazka zatim nema zadne prilohy.</div>
+            ) : (
+              <div className="space-y-2">
+                {detail.attachments.map((attachment) => (
+                  <div key={attachment.id} className="flex items-center justify-between rounded-lg border border-slate-200 p-3 text-sm">
+                    <div>
+                      <div className="font-medium text-slate-900">{attachment.original_filename}</div>
+                      <div className="text-slate-500">{new Date(attachment.uploaded_at).toLocaleString('cs-CZ')}</div>
+                    </div>
+                    <div className="text-slate-500">{Math.round(attachment.file_size / 1024)} kB</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-3 text-lg font-semibold">Historie zmen</h2>
+            {detail.audit_logs.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">Bez zaznamenanych zmen.</div>
+            ) : (
+              <div className="space-y-2">
+                {detail.audit_logs.map((log) => (
+                  <div key={log.id} className="rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-slate-900">{log.action}</p>
+                      <p className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('cs-CZ')}</p>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-700">{log.details || '-'}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
+    </main>
+  );
+}
