@@ -174,6 +174,39 @@ docker compose down -v
 docker compose up --build -d
 ```
 
+## Development workflow
+
+Jak spustit projekt lokálně:
+
+1. Sestavte a spusťte kontejnery:
+
+```bash
+docker compose up --build -d
+```
+
+2. Backend bude dostupný na `http://localhost:8000`, frontend na `http://localhost:3000`.
+
+Jak spustit Alembic migrace lokálně:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+Jak spustit backend testy lokálně:
+
+```bash
+cd backend
+PYTHONPATH=. pytest -q
+```
+
+Jak funguje CI:
+
+- CI pipeline je definována v `.github/workflows/ci.yml` a spouští se pro každé `pull_request`.
+- Pipeline provede: instalaci backend závislostí, spuštění Alembic migrací, backend testy, instalaci a build frontendu, Docker image build, spuštění docker compose a smoke testy (health, login, create customer, import PDF, create job, job detail).
+- Pokud CI běh selže, PR nebude považován za bezpečný ke sloučení.
+
+
 ## Struktura projektu
 
 ```text
