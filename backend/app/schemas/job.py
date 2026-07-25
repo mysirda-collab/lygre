@@ -99,7 +99,9 @@ class JobBase(BaseModel):
 
 
 class JobCreate(JobBase):
-    pass
+    customer_id: int | None = None
+    order_number: str | None = None
+    parser_confidence: float = 0.0
 
 
 class JobUpdate(JobBase):
@@ -110,6 +112,9 @@ class JobRead(JobBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    customer_id: int | None = None
+    order_number: str | None = None
+    parser_confidence: float = 0.0
 
     class Config:
         from_attributes = True
@@ -130,6 +135,11 @@ class JobAttachmentRead(BaseModel):
     uploaded_at: datetime
     file_size: int
     status: str
+    source_document_id: str | None = None
+    source_original_filename: str | None = None
+    page_number: int | None = None
+    total_pages: int | None = None
+    is_primary: bool = False
 
 
 class JobAuditLogRead(BaseModel):
@@ -145,6 +155,7 @@ class JobDetailResponse(BaseModel):
     job: JobRead
     attachments: list[JobAttachmentRead]
     audit_logs: list[JobAuditLogRead]
+    primary_attachment_id: int | None = None
 
 
 class DashboardSummaryResponse(BaseModel):

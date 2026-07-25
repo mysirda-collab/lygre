@@ -1,8 +1,10 @@
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -42,34 +44,98 @@ async def upload_pdf(
     upload_dir = Path(settings.uploads_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    stored_filename = f"{uuid4().hex}.pdf"
-    file_path = upload_dir / stored_filename
-    file_path.write_bytes(contents)
-
-    upload = create_upload(
-        db=db,
-        original_filename=file.filename,
-        stored_filename=stored_filename,
-        file_path=str(file_path),
-        content_type=content_type,
-        file_size=len(contents),
-        status="Zpracovává se",
-        processing_status="Zpracovává se",
-    )
-
     service = JobCreationService(db)
-    try:
-        service.process_upload(upload, str(file_path))
-    except Exception as exc:
-        update_upload(
-            db,
-            upload,
-            status="Chyba",
-            processing_status="Chyba",
-            error_message=str(exc)[:1000],
-        )
+    created_ids: list[int] = []
+    source_document_id = uuid4().hex
+    source_stored_filename = f"{uuid4().hex}.pdf"
+    source_file_path = upload_dir / source_stored_filename
+    source_file_path.write_bytes(contents)
 
-    return UploadCreateResponse(id=upload.id)
+    try:
+        reader = PdfReader(BytesIO(contents))
+        total_pages = len(reader.pages)
+    except Exception:
+        total_pages = 0
+
+    if total_pages <= 0:
+        stored_filename = f"{uuid4().hex}.pdf"
+        page_path = upload_dir / stored_filename
+        page_path.write_bytes(contents)
+
+        upload = create_upload(
+            db=db,
+            original_filename=f"{file.filename} - strana 1/1",
+            stored_filename=stored_filename,
+            file_path=str(page_path),
+            content_type=content_type,
+            file_size=page_path.stat().st_size,
+            status="Zpracovává se",
+            processing_status="Zpracovává se",
+            source_document_id=source_document_id,
+            source_original_filename=file.filename,
+            source_stored_filename=source_stored_filename,
+            source_file_path=str(source_file_path),
+            page_number=1,
+            total_pages=1,
+        )
+        created_ids.append(upload.id)
+
+        try:
+            service.process_upload(upload, str(page_path))
+        except Exception as exc:
+            update_upload(
+                db,
+                upload,
+                status="Vyžaduje kontrolu",
+                processing_status="Vyžaduje kontrolu",
+                error_message=str(exc)[:1000],
+            )
+    else:
+        for page_number, page in enumerate(reader.pages, start=1):
+            writer = PdfWriter()
+            writer.add_page(page)
+            stored_filename = f"{uuid4().hex}.pdf"
+            page_path = upload_dir / stored_filename
+            with page_path.open("wb") as f:
+                writer.write(f)
+
+            upload = create_upload(
+                db=db,
+                original_filename=f"{file.filename} - strana {page_number}/{total_pages}",
+                stored_filename=stored_filename,
+                file_path=str(page_path),
+                content_type=content_type,
+                file_size=page_path.stat().st_size,
+                status="Zpracovává se",
+                processing_status="Zpracovává se",
+                source_document_id=source_document_id,
+                source_original_filename=file.filename,
+                source_stored_filename=source_stored_filename,
+                source_file_path=str(source_file_path),
+                page_number=page_number,
+                total_pages=total_pages,
+            )
+            created_ids.append(upload.id)
+
+            try:
+                service.process_upload(upload, str(page_path))
+            except Exception as exc:
+                update_upload(
+                    db,
+                    upload,
+                    status="Vyžaduje kontrolu",
+                    processing_status="Vyžaduje kontrolu",
+                    error_message=str(exc)[:1000],
+                )
+
+    return UploadCreateResponse(
+        id=created_ids[0],
+        created_ids=created_ids,
+        created_count=len(created_ids),
+        source_document_id=source_document_id,
+        source_original_filename=file.filename,
+        total_pages=total_pages or 1,
+    )
 
 
 @router.get("/pdf", response_model=list[UploadRead], summary="List uploaded PDFs")
@@ -116,17 +182,11 @@ def review_upload_job(
         db.refresh(upload)
         return updated
 
-    existing = get_job_by_number(db=db, job_number=job_in.job_number)
-    if existing:
-        upload.job_id = existing.id
-        upload.status = "Hotovo"
-        upload.processing_status = "Hotovo"
-        db.add(upload)
-        db.commit()
-        db.refresh(upload)
-        return existing
+    job_data = job_in.model_dump()
+    if get_job_by_number(db=db, job_number=job_data["job_number"]):
+        job_data["job_number"] = f"{job_data['job_number']}-{upload.id}"
 
-    created = create_job(db=db, job_data=job_in.model_dump())
+    created = create_job(db=db, job_data=job_data)
     upload.job_id = created.id
     upload.status = "Hotovo"
     upload.processing_status = "Hotovo"
@@ -154,4 +214,25 @@ def download_upload_file(
         path=file_path,
         media_type=upload.content_type or "application/pdf",
         filename=upload.original_filename,
+    )
+
+
+@router.get("/pdf/{upload_id}/source-file")
+def download_upload_source_file(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> FileResponse:
+    upload = get_upload_by_id(db=db, upload_id=upload_id)
+    if not upload:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload nenalezen")
+
+    source_path = Path(upload.source_file_path or upload.file_path)
+    if not source_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Původní soubor nebyl nalezen na disku")
+
+    return FileResponse(
+        path=source_path,
+        media_type=upload.content_type or "application/pdf",
+        filename=upload.source_original_filename or upload.original_filename,
     )

@@ -1,6 +1,6 @@
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -13,13 +13,17 @@ security = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
-    if credentials is None:
+    token: str | None = credentials.credentials if credentials else None
+    if token is None and request is not None:
+        token = request.cookies.get("lygre_access_token")
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
 
-    payload = decode_token_safe(credentials.credentials)
+    payload = decode_token_safe(token)
     if not payload or payload.get("type") != TokenKind.ACCESS:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid access token")
 

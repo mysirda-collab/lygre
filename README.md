@@ -11,6 +11,7 @@ Lygre je informační systém pro správu zakázek montážní firmy.
 - SQLAlchemy 2.0 modely a CRUD vrstva
 - Alembic migrace pro schéma jobs/uploads/auth + Sprint 2 indexy + Sprint 3 kalendář
 - Automatické vytěžení textových PDF přes pypdf
+- OCR fallback pro skenovaná PDF (pdf2image + Tesseract přes pytesseract, jazyky `ces+eng`)
 - Next.js frontend (dashboard, seznam zakázek, detail, import PDF, ruční korekce)
 - Docker Compose orchestrace (db + backend + frontend)
 
@@ -84,7 +85,23 @@ Po spuštění budou dostupné:
 - Swagger: http://localhost:8000/docs
 
 Volitelné prostředí pro frontend:
-- `NEXT_PUBLIC_API_BASE_URL` (default: `http://localhost:8000`)
+- `NEXT_SERVER_API_URL` (server-side proxy target pro `/api/*`, např. `http://backend:8000` v Dockeru)
+- `NEXT_PUBLIC_API_BASE_URL` (volitelně veřejná API URL; pokud není nastavena, frontend používá same-origin cesty)
+
+### API konfigurace bez změn zdrojového kódu
+
+Frontend je nastaven tak, aby fungoval napříč prostředími bez úprav kódu:
+
+- Výchozí režim (doporučený):
+  - klient volá relativní cesty (`/api/v1/...`),
+  - Next.js proxy (`rewrites`) přesměruje `/api/*` na backend podle `NEXT_SERVER_API_URL`.
+- Docker / Codespaces:
+  - v `docker-compose.yml` je `NEXT_SERVER_API_URL=http://backend:8000`.
+- Proxmox:
+  - ponechte stejný princip (frontend proxy na interní backend URL),
+  - není potřeba měnit frontend kód, pouze environment konfiguraci.
+- Externí API doména (volitelné):
+  - nastavte `NEXT_PUBLIC_API_BASE_URL` na veřejnou URL backendu.
 
 Volitelné prostředí pro backend:
 - `JWT_SECRET_KEY`
@@ -93,6 +110,46 @@ Volitelné prostředí pro backend:
 - `SEED_ADMIN_EMAIL`
 - `SEED_ADMIN_NAME`
 - `SEED_ADMIN_PASSWORD`
+
+## OCR pipeline pro PDF import
+
+Import PDF nyní používá dvoukrokové vytěžení textu:
+
+1. Nejprve se zkusí extrakce textu přes `pypdf`.
+2. Pokud je výsledek prázdný (typicky sken), automaticky se spustí OCR přes `pdf2image` + `pytesseract`.
+3. OCR běží nad všemi stránkami a výsledný text se skládá do jednoho dokumentu.
+
+Speciální parser pro zakázkové listy extrahuje tato pole:
+- číslo objednávky,
+- datum vytvoření,
+- zákaznické číslo,
+- jméno zákazníka,
+- ulici,
+- město,
+- telefon,
+- ID objednávky,
+- typ objednávky.
+
+Pokud OCR selže nebo chybí povinná pole, upload zůstane ve stavu vyžadujícím ruční kontrolu (nevytvoří se automaticky zakázka).
+
+### OCR závislosti
+
+V backend image jsou nainstalované systémové balíky:
+- `tesseract-ocr`
+- `tesseract-ocr-ces`
+- `poppler-utils`
+
+Python balíky:
+- `pdf2image`
+- `pytesseract`
+
+### Customers & Jobs (Milestone 1)
+
+Backend nyní obsahuje normalizovanou entitu `Customer` a rozšířenou entitu `Job`.
+- `Customer` slouží jako dlouhodobá evidence zákazníků (přidáno `customer_number`, `uuid`, kontaktní pole).
+- `Job` obsahuje odkaz `customer_id`, `order_number` a `parser_confidence`. Vazba na `Upload` je reprezentována jednosměrně přes `Upload.job_id`.
+
+Import workflow zůstává stejný, ale po importu už systém pracuje s `Customer` a `Job` jako primárními entitami.
 
 ## Testy a build
 

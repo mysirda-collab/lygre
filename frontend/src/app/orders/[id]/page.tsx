@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 
+import { apiUrl } from '@/lib/api';
 import { authFetch } from '@/lib/auth';
 
 type Job = {
@@ -33,6 +34,9 @@ type JobDetailResponse = {
     uploaded_at: string;
     file_size: number;
     status: string;
+    source_original_filename?: string | null;
+    page_number?: number | null;
+    total_pages?: number | null;
   }>;
   audit_logs: Array<{
     id: number;
@@ -139,6 +143,17 @@ export default function OrderDetailPage() {
                     <div>
                       <div className="font-medium text-slate-900">{attachment.original_filename}</div>
                       <div className="text-slate-500">{new Date(attachment.uploaded_at).toLocaleString('cs-CZ')}</div>
+                      {attachment.source_original_filename ? (
+                        <div className="text-slate-500">
+                          Zdroj: {attachment.source_original_filename} · Strana {attachment.page_number || 1}/{attachment.total_pages || 1}
+                        </div>
+                      ) : null}
+                      <button
+                        onClick={() => window.open(apiUrl(`/api/v1/uploads/pdf/${attachment.id}/source-file`), '_blank')}
+                        className="mt-1 text-xs font-medium text-slate-700 underline-offset-2 hover:underline"
+                      >
+                        Otevřít původní PDF
+                      </button>
                     </div>
                     <div className="text-slate-500">{Math.round(attachment.file_size / 1024)} kB</div>
                   </div>

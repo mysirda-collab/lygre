@@ -16,6 +16,12 @@ def create_upload(
     file_size: int,
     status: str = "Hotovo",
     processing_status: str = "Zpracovává se",
+    source_document_id: str | None = None,
+    source_original_filename: str | None = None,
+    source_stored_filename: str | None = None,
+    source_file_path: str | None = None,
+    page_number: int | None = None,
+    total_pages: int | None = None,
 ) -> Upload:
     upload = Upload(
         original_filename=original_filename,
@@ -25,6 +31,12 @@ def create_upload(
         file_size=file_size,
         status=status,
         processing_status=processing_status,
+        source_document_id=source_document_id,
+        source_original_filename=source_original_filename,
+        source_stored_filename=source_stored_filename,
+        source_file_path=source_file_path,
+        page_number=page_number,
+        total_pages=total_pages,
     )
     db.add(upload)
     db.commit()

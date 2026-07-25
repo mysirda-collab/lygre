@@ -1,9 +1,12 @@
 import tempfile
 import unittest
+from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -201,9 +204,8 @@ class ApiIntegrationTest(unittest.TestCase):
         detail = self.client.get(f"/api/v1/uploads/pdf/{upload_id}", headers=headers)
         self.assertEqual(detail.status_code, 200)
         body = detail.json()
-        self.assertEqual(body["status"], "Chyba")
-        self.assertEqual(body["processing_status"], "Chyba")
-        self.assertIsNotNone(body["error_message"])
+        self.assertEqual(body["status"], "Vyžaduje kontrolu")
+        self.assertEqual(body["processing_status"], "Vyžaduje kontrolu")
 
     def test_upload_review_creates_job(self) -> None:
         headers, _ = self._login_admin()
@@ -235,6 +237,42 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(upload_detail.status_code, 200)
         self.assertEqual(upload_detail.json()["status"], "Hotovo")
         self.assertIsNotNone(upload_detail.json()["job_id"])
+
+    def test_e2e_import_11_page_pdf_creates_uploads_and_jobs(self) -> None:
+        headers, _ = self._login_admin()
+        # build 11-page PDF in-memory
+        writer = PdfWriter()
+        for i in range(11):
+            writer.add_blank_page(width=200, height=200)
+        bio = BytesIO()
+        writer.write(bio)
+        bio.seek(0)
+
+        with patch("app.api.v1.endpoints.uploads.settings.uploads_dir", str(self.upload_dir)):
+            response = self.client.post(
+                "/api/v1/uploads/pdf",
+                files={"file": ("test_11.pdf", bio.read(), "application/pdf")},
+                headers=headers,
+            )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body.get("created_count"), 11)
+
+        # verify DB objects linked
+        with self.SessionLocal() as db:
+            uploads = db.query(Upload).order_by(Upload.id.desc()).limit(11).all()
+            self.assertEqual(len(uploads), 11)
+            jobs = db.query(Job).order_by(Job.id.desc()).limit(11).all()
+            self.assertEqual(len(jobs), 11)
+            # ensure parser_confidence is present and between 0.0 and 1.0
+            for job in jobs:
+                self.assertIsNotNone(job.parser_confidence)
+                self.assertGreaterEqual(job.parser_confidence, 0.0)
+                self.assertLessEqual(job.parser_confidence, 1.0)
+            # ensure uploads point to jobs via job_id
+            for u in uploads:
+                self.assertIsNotNone(u.job_id)
 
     def test_upload_file_returns_404_when_missing(self) -> None:
         headers, _ = self._login_admin()
@@ -318,6 +356,94 @@ class ApiIntegrationTest(unittest.TestCase):
         with self.SessionLocal() as db:
             logs = db.query(AuditLog).filter(AuditLog.entity_type == "calendar_event").all()
             self.assertGreaterEqual(len(logs), 3)
+
+    def test_upload_pdf_creates_record_per_page(self) -> None:
+        headers, _ = self._login_admin()
+
+        writer = PdfWriter()
+        for _ in range(4):
+            writer.add_blank_page(width=595, height=842)
+        buffer = BytesIO()
+        writer.write(buffer)
+        pdf_bytes = buffer.getvalue()
+
+        with patch("app.api.v1.endpoints.uploads.settings.uploads_dir", str(self.upload_dir)), patch(
+            "app.api.v1.endpoints.uploads.JobCreationService.process_upload", return_value=({}, None)
+        ):
+            response = self.client.post(
+                "/api/v1/uploads/pdf",
+                files={"file": ("four-pages.pdf", pdf_bytes, "application/pdf")},
+                headers=headers,
+            )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["created_count"], 4)
+        self.assertEqual(len(body["created_ids"]), 4)
+        self.assertEqual(body["total_pages"], 4)
+        self.assertEqual(body["source_original_filename"], "four-pages.pdf")
+        self.assertTrue(body.get("source_document_id"))
+
+        uploads = self.client.get("/api/v1/uploads/pdf", headers=headers)
+        self.assertEqual(uploads.status_code, 200)
+        items = uploads.json()
+        page_uploads = [item for item in items if item["original_filename"].startswith("four-pages.pdf - strana ")]
+        self.assertEqual(len(page_uploads), 4)
+        page_numbers = sorted(item.get("page_number") for item in page_uploads)
+        self.assertEqual(page_numbers, [1, 2, 3, 4])
+        self.assertTrue(all(item.get("total_pages") == 4 for item in page_uploads))
+
+    def test_jobs_list_handles_legacy_invalid_phone(self) -> None:
+        headers, _ = self._login_admin()
+        with self.SessionLocal() as db:
+            job = Job(
+                job_number="LEGACY-1",
+                status="new",
+                priority="medium",
+                customer_name="Legacy Customer",
+                phone="605041013; Františka Krejčířová",
+                email="legacy@example.com",
+                street="Test 1",
+                city="Brno",
+                zip="60200",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+                is_deleted=False,
+            )
+            db.add(job)
+            db.commit()
+
+        response = self.client.get("/api/v1/jobs", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        items = response.json()["items"]
+        legacy = next((item for item in items if item["job_number"] == "LEGACY-1"), None)
+        self.assertIsNotNone(legacy)
+        self.assertEqual(legacy["phone"], "605041013")
+
+    def test_upload_source_file_download(self) -> None:
+        headers, _ = self._login_admin()
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=595, height=842)
+        buffer = BytesIO()
+        writer.write(buffer)
+        pdf_bytes = buffer.getvalue()
+
+        with patch("app.api.v1.endpoints.uploads.settings.uploads_dir", str(self.upload_dir)), patch(
+            "app.api.v1.endpoints.uploads.JobCreationService.process_upload", return_value=({}, None)
+        ):
+            response = self.client.post(
+                "/api/v1/uploads/pdf",
+                files={"file": ("single-page.pdf", pdf_bytes, "application/pdf")},
+                headers=headers,
+            )
+
+        self.assertEqual(response.status_code, 201)
+        upload_id = response.json()["id"]
+
+        source_response = self.client.get(f"/api/v1/uploads/pdf/{upload_id}/source-file", headers=headers)
+        self.assertEqual(source_response.status_code, 200)
+        self.assertGreater(len(source_response.content), 10)
 
 
 if __name__ == "__main__":

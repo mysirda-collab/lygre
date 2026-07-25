@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 import { apiUrl } from '@/lib/api';
+import { authFetch } from '@/lib/auth';
 
 interface UploadItem {
   id: number;
@@ -51,7 +52,7 @@ export default function ReviewUploadPage() {
 
   useEffect(() => {
     const loadUpload = async () => {
-      const response = await fetch(apiUrl(`/api/v1/uploads/pdf/${params.id}`));
+      const response = await authFetch(`/api/v1/uploads/pdf/${params.id}`);
       if (!response.ok) return;
       const data = await response.json();
       setUpload(data);
@@ -92,7 +93,7 @@ export default function ReviewUploadPage() {
     setSaving(true);
     setMessage(null);
 
-    const response = await fetch(apiUrl(`/api/v1/uploads/pdf/${params.id}/review`), {
+    const response = await authFetch(`/api/v1/uploads/pdf/${params.id}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form),

@@ -1,5 +1,7 @@
 import logging
 from datetime import datetime
+import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -22,6 +24,60 @@ from app.schemas.job import DashboardSummaryResponse, JobCreate, JobDetailRespon
 
 router = APIRouter()
 logger = logging.getLogger("jobs")
+
+
+def _normalize_phone(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = re.search(r"(?:\+\d{1,3}\s?)?(?:\d[\d\s()\-]{5,}\d)", cleaned)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(0)).strip(" ;,") or None
+
+
+def _normalize_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", cleaned)
+    return match.group(0) if match else None
+
+
+def _normalize_zip(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = re.search(r"\b\d{3}\s?\d{2}\b", cleaned)
+    return match.group(0) if match else None
+
+
+def _job_to_read(job: Any) -> JobRead:
+    data = {
+        "id": job.id,
+        "job_number": job.job_number,
+        "status": job.status,
+        "priority": job.priority,
+        "customer_name": job.customer_name,
+        "company": job.company,
+        "phone": _normalize_phone(job.phone),
+        "email": _normalize_email(job.email),
+        "street": job.street,
+        "city": job.city,
+        "zip": _normalize_zip(job.zip),
+        "installation_date": job.installation_date,
+        "technician": job.technician,
+        "notes": job.notes,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+    return JobRead.model_validate(data)
 
 
 @router.get("", response_model=JobListResponse, summary="List jobs")
@@ -55,7 +111,8 @@ def list_jobs(
         sort_by=sort_by,
         sort_desc=sort_desc,
     )
-    return JobListResponse(items=list(jobs), total=total, page=skip // limit + 1, page_size=limit)
+    items = [_job_to_read(job) for job in jobs]
+    return JobListResponse(items=items, total=total, page=skip // limit + 1, page_size=limit)
 
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse, summary="Dashboard summary")
@@ -64,7 +121,12 @@ def dashboard_summary(
     _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
 ) -> DashboardSummaryResponse:
     data = get_dashboard_summary(db)
-    return DashboardSummaryResponse(**data)
+    return DashboardSummaryResponse(
+        status_counts=data["status_counts"],
+        recent_jobs=[_job_to_read(job) for job in data["recent_jobs"]],
+        overdue_jobs=[_job_to_read(job) for job in data["overdue_jobs"]],
+        today_installations=[_job_to_read(job) for job in data["today_installations"]],
+    )
 
 
 @router.get("/{job_id}/detail", response_model=JobDetailResponse, summary="Get job detail")
@@ -76,7 +138,12 @@ def get_job_detail(
     job, attachments, audit_logs = get_job_detail_data(db, job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    return JobDetailResponse(job=job, attachments=attachments, audit_logs=audit_logs)
+    primary_id = None
+    for a in attachments:
+        if getattr(a, "is_primary", False):
+            primary_id = a.id
+            break
+    return JobDetailResponse(job=_job_to_read(job), attachments=attachments, audit_logs=audit_logs, primary_attachment_id=primary_id)
 
 
 @router.get("/{job_id}", response_model=JobRead, summary="Get job by id")
@@ -88,7 +155,7 @@ def get_job(
     job = get_job_by_id(db=db, job_id=job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    return job
+    return _job_to_read(job)
 
 
 @router.post("", response_model=JobRead, status_code=status.HTTP_201_CREATED, summary="Create job")
@@ -103,7 +170,7 @@ def create_job_endpoint(
     created = create_job(db=db, job_data=job_in.model_dump())
     create_audit_log(db=db, entity_type="job", entity_id=created.id, action="create", details=f"Created job {created.job_number}")
     logger.info("Created job %s", created.job_number)
-    return created
+    return _job_to_read(created)
 
 
 @router.put("/{job_id}", response_model=JobRead, summary="Update job")
@@ -123,7 +190,7 @@ def update_job_endpoint(
     updated = update_job(db=db, job=job, job_data=job_in.model_dump())
     create_audit_log(db=db, entity_type="job", entity_id=updated.id, action="update", details=f"Updated job {updated.job_number}")
     logger.info("Updated job %s", updated.job_number)
-    return updated
+    return _job_to_read(updated)
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete job")

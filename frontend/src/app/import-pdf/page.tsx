@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from 'react';
 
 import { apiUrl } from '@/lib/api';
+import { authFetch } from '@/lib/auth';
 
 interface UploadItem {
   id: number;
@@ -16,6 +17,16 @@ interface UploadItem {
   parsed_data?: Record<string, string | boolean> | string | null;
   job_id?: number | null;
   processing_status?: string | null;
+  source_document_id?: string | null;
+  source_original_filename?: string | null;
+  page_number?: number | null;
+  total_pages?: number | null;
+}
+
+interface UploadCreateResponse {
+  id: number;
+  created_ids?: number[];
+  created_count?: number;
 }
 
 const statusStyles: Record<string, string> = {
@@ -35,7 +46,7 @@ export default function ImportPdfPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const fetchUploads = async () => {
-    const response = await fetch(apiUrl('/api/v1/uploads/pdf'));
+    const response = await authFetch('/api/v1/uploads/pdf');
     if (response.ok) {
       const data = await response.json();
       setUploads(data);
@@ -72,7 +83,7 @@ export default function ImportPdfPage() {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(apiUrl('/api/v1/uploads/pdf'), {
+    const response = await authFetch('/api/v1/uploads/pdf', {
       method: 'POST',
       body: formData,
     });
@@ -87,12 +98,37 @@ export default function ImportPdfPage() {
       return;
     }
 
+    const data: UploadCreateResponse = await response.json().catch(() => ({ id: 0 }));
+
     await fetchUploads();
-    setMessage(`PDF nahráno: ${file.name}`);
+    const createdCount = data.created_count ?? data.created_ids?.length ?? 1;
+    setMessage(`PDF nahráno: ${file.name} (${createdCount} záznam${createdCount === 1 ? '' : createdCount < 5 ? 'y' : 'ů'})`);
     setFile(null);
   };
 
   const totalSize = useMemo(() => uploads.reduce((sum, item) => sum + item.file_size, 0), [uploads]);
+
+  const sourceSummaries = useMemo(() => {
+    const map = new Map<string, { sourceName: string; totalPages: number; uploadCount: number; createdJobs: number }>();
+    for (const upload of uploads) {
+      const key = upload.source_document_id || `single-${upload.id}`;
+      const sourceName = upload.source_original_filename || upload.original_filename;
+      const totalPages = upload.total_pages || 1;
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          sourceName,
+          totalPages,
+          uploadCount: 1,
+          createdJobs: upload.job_id ? 1 : 0,
+        });
+      } else {
+        existing.uploadCount += 1;
+        existing.createdJobs += upload.job_id ? 1 : 0;
+      }
+    }
+    return Array.from(map.values());
+  }, [uploads]);
 
   const parseParsedData = (upload: UploadItem) => {
     if (!upload.parsed_data) return null;
@@ -155,6 +191,19 @@ export default function ImportPdfPage() {
           <h2 className="text-lg font-semibold">Evidence PDF</h2>
           <p className="mt-2 text-sm text-slate-500">Celkem nahráno: {uploads.length}</p>
           <p className="mt-1 text-sm text-slate-500">Celková velikost: {(totalSize / 1024 / 1024).toFixed(2)} MB</p>
+          <div className="mt-4 space-y-2 text-sm text-slate-600">
+            {sourceSummaries.length === 0 ? (
+              <p>Zatím bez historie importů.</p>
+            ) : sourceSummaries.map((summary) => (
+              <div key={`${summary.sourceName}-${summary.totalPages}-${summary.uploadCount}`} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <div className="font-medium text-slate-700">{summary.sourceName}</div>
+                <div>Stran: {summary.totalPages} · Vytvořené listy: {summary.uploadCount}</div>
+                <div>
+                  Vytvořené zakázky: {summary.createdJobs} / {summary.uploadCount}
+                </div>
+              </div>
+            ))}
+          </div>
         </aside>
       </div>
 
@@ -178,6 +227,11 @@ export default function ImportPdfPage() {
                     <div className="mt-1 text-sm text-slate-500">
                       {new Date(upload.uploaded_at).toLocaleString('cs-CZ')} · {(upload.file_size / 1024).toFixed(1)} KB
                     </div>
+                    {upload.source_original_filename ? (
+                      <div className="mt-1 text-xs text-slate-500">
+                        Zdroj: {upload.source_original_filename} · Strana {upload.page_number || 1}/{upload.total_pages || 1}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[upload.status] || 'bg-slate-100 text-slate-700'}`}>

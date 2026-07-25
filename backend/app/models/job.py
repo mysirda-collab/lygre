@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, String, Integer, Float, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import relationship
 
 from app.models.base import Base
 
@@ -30,3 +31,10 @@ class Job(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    
+    customer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
+    order_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parser_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    customer = relationship("Customer", back_populates="jobs")
+    # Attachment link removed to prefer single-direction relation via Upload.job_id

@@ -8,6 +8,8 @@ psycopg[binary]==3.2.2
 python-dotenv==1.0.1
 python-multipart==0.0.9
 pypdf==5.2.0
+pdf2image==1.17.0
+pytesseract==0.3.13
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 argon2-cffi==23.1.0
