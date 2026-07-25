@@ -21,6 +21,8 @@ def upgrade() -> None:
         batch_op.drop_index("ix_jobs_attachment_id")
         batch_op.drop_column("attachment_id")
     # make parser_confidence non-nullable with default 0.0
+    # backfill existing NULL parser_confidence values to 0.0 before setting NOT NULL
+    op.execute("UPDATE jobs SET parser_confidence = 0.0 WHERE parser_confidence IS NULL")
     with op.batch_alter_table("jobs") as batch_op:
         batch_op.alter_column("parser_confidence",
                               existing_type=sa.Float(),
