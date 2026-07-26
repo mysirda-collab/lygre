@@ -194,6 +194,11 @@ class ApiIntegrationTest(unittest.TestCase):
         response = self.client.get("/api/v1/jobs")
         self.assertEqual(response.status_code, 401)
 
+    def test_customers_endpoint_requires_auth(self) -> None:
+        # ensure customers endpoints are protected
+        response = self.client.get("/api/v1/customers")
+        self.assertEqual(response.status_code, 401)
+
     def test_upload_invalid_type_rejected(self) -> None:
         headers, _ = self._login_admin()
         response = self.client.post(

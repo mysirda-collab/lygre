@@ -5,13 +5,15 @@ from sqlalchemy.orm import Session
 from app.schemas.customer import CustomerCreate, CustomerRead, CustomerUpdate
 from app.dependencies.database import get_db
 from app.crud.customer import create_customer, get_customer_by_id, get_customer_by_number, update_customer, search_customers, find_or_create
+from app.dependencies.auth import require_roles
+from app.models.user import UserRole
 import uuid as _uuid
 
 router = APIRouter()
 
 
 @router.post("", response_model=CustomerRead)
-def create_customer_endpoint(payload: CustomerCreate, db: Session = Depends(get_db)):
+def create_customer_endpoint(payload: CustomerCreate, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER))):
     cid = _uuid.uuid4().hex
     existing = get_customer_by_number(db, payload.customer_number)
     if existing:
@@ -21,7 +23,7 @@ def create_customer_endpoint(payload: CustomerCreate, db: Session = Depends(get_
 
 
 @router.get("/{customer_id}", response_model=CustomerRead)
-def get_customer_endpoint(customer_id: int, db: Session = Depends(get_db)):
+def get_customer_endpoint(customer_id: int, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER))):
     c = get_customer_by_id(db, customer_id)
     if not c:
         raise HTTPException(status_code=404, detail="not found")
@@ -29,7 +31,7 @@ def get_customer_endpoint(customer_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{customer_id}", response_model=CustomerRead)
-def update_customer_endpoint(customer_id: int, payload: CustomerUpdate, db: Session = Depends(get_db)):
+def update_customer_endpoint(customer_id: int, payload: CustomerUpdate, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER))):
     c = get_customer_by_id(db, customer_id)
     if not c:
         raise HTTPException(status_code=404, detail="not found")
@@ -38,7 +40,7 @@ def update_customer_endpoint(customer_id: int, payload: CustomerUpdate, db: Sess
 
 
 @router.get("", response_model=List[CustomerRead])
-def search_customers_endpoint(q: str | None = None, db: Session = Depends(get_db)):
+def search_customers_endpoint(q: str | None = None, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER))):
     if not q:
         return []
     results = search_customers(db, query=q)

@@ -19,9 +19,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+cors_origins = []
+if settings.debug:
+    cors_origins = ["*"]
+else:
+    # in production require explicit allowed origins via env
+    cors_origins = settings.allowed_origins or []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +41,12 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 def startup_seed_admin() -> None:
     db: Session = SessionLocal()
     try:
+        # fail-fast in production when secrets are not configured
+        if not settings.debug and settings.is_production and (
+            not settings.jwt_secret_key or settings.jwt_secret_key == "change-me-in-production"
+        ):
+            raise RuntimeError("JWT secret key is not configured for production")
+
         seed_admin_user(
             db,
             email=settings.seed_admin_email,

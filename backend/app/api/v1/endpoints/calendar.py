@@ -16,6 +16,7 @@ from app.crud.calendar_event import (
     update_calendar_event,
 )
 from app.dependencies.auth import require_roles
+from sqlalchemy.exc import IntegrityError
 from app.dependencies.database import get_db
 from app.models.user import User, UserRole
 from app.schemas.time_slot import (
@@ -290,7 +291,10 @@ def create_event(
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
     )
-    created = create_calendar_event(db, data=payload.model_dump())
+    try:
+        created = create_calendar_event(db, data=payload.model_dump())
+    except IntegrityError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Technician already has an event in this time range")
     create_audit_log(
         db,
         entity_type="calendar_event",
@@ -332,7 +336,10 @@ def update_event(
         ends_at=payload.ends_at,
         exclude_event_id=event.id,
     )
-    updated = update_calendar_event(db, event=event, data=payload.model_dump())
+    try:
+        updated = update_calendar_event(db, event=event, data=payload.model_dump())
+    except IntegrityError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Technician already has an event in this time range")
     create_audit_log(
         db,
         entity_type="calendar_event",

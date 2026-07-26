@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     seed_admin_password: str = "Admin123!"
     uploads_dir: str = "/app/uploads"
     uploads_dir_host: str = "/workspaces/lygre/backend/uploads"
+    # By default require explicit allowed origins in environment for production
+    allowed_origins: list[str] = []
+    # toggle production-level fail-fast checks (set LYGRE_PRODUCTION=1 in env)
+    is_production: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
