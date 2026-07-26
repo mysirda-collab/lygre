@@ -10,8 +10,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.core.config import settings
 from app.models.base import Base
 import app.models.audit_log  # noqa: F401
+import app.models.customer  # noqa: F401
 import app.models.job  # noqa: F401
 import app.models.refresh_token  # noqa: F401
+import app.models.reservation  # noqa: F401
+import app.models.sms_log  # noqa: F401
+import app.models.sms_template  # noqa: F401
+import app.models.time_slot  # noqa: F401
 import app.models.upload  # noqa: F401
 import app.models.user  # noqa: F401
 

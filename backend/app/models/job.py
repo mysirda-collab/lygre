@@ -37,4 +37,6 @@ class Job(Base):
     parser_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     customer = relationship("Customer", back_populates="jobs")
+    reservations = relationship("Reservation", back_populates="job")
+    sms_logs = relationship("SmsLog", back_populates="job")
     # Attachment link removed to prefer single-direction relation via Upload.job_id

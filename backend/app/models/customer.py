@@ -26,3 +26,5 @@ class Customer(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     jobs = relationship("Job", back_populates="customer", cascade="save-update, merge", passive_deletes=True)
+    reservations = relationship("Reservation", back_populates="customer")
+    sms_logs = relationship("SmsLog", back_populates="customer")
