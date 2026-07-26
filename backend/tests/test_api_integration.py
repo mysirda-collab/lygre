@@ -22,10 +22,19 @@ from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models import audit_log as _audit_log  # noqa: F401
 from app.models import calendar_event as _calendar_event  # noqa: F401
+from app.models import customer as _customer  # noqa: F401
 from app.models import job as _job  # noqa: F401
 from app.models import refresh_token as _refresh_token  # noqa: F401
+from app.models import reservation as _reservation  # noqa: F401
+from app.models import sms_log as _sms_log  # noqa: F401
+from app.models import sms_template as _sms_template  # noqa: F401
+from app.models import time_slot as _time_slot  # noqa: F401
 from app.models import upload as _upload  # noqa: F401
 from app.models import user as _user  # noqa: F401
+from app.models.customer import Customer
+from app.models.reservation import Reservation
+from app.models.sms_log import SmsLog
+from app.models.time_slot import TimeSlot
 from app.models.upload import Upload
 from app.services.auth_service import seed_admin_user
 
@@ -62,10 +71,14 @@ class ApiIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         with self.SessionLocal() as db:
             db.query(Upload).delete()
+            db.query(SmsLog).delete()
+            db.query(Reservation).delete()
+            db.query(TimeSlot).delete()
             db.query(RefreshToken).delete()
             db.query(AuditLog).delete()
             db.query(CalendarEvent).delete()
             db.query(Job).delete()
+            db.query(Customer).delete()
             db.query(User).filter(User.email != "admin@lygre.local").delete()
             seed_admin_user(
                 db,
@@ -427,6 +440,80 @@ class ApiIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(available_after_block.status_code, 200)
         self.assertEqual(len(available_after_block.json()["items"]), 0)
+
+    def test_reservation_public_confirm_flow_creates_sms_log(self) -> None:
+        headers, _ = self._login_admin()
+
+        customer_create = self.client.post(
+            "/api/v1/customers",
+            json={
+                "customer_number": "C-RES-001",
+                "name": "Zakaznik Rezervace",
+                "phone": "+420603000111",
+                "email": "rezervace@example.com",
+                "street": "Ulice 1",
+                "city": "Praha",
+                "zip": "11000",
+            },
+            headers=headers,
+        )
+        self.assertEqual(customer_create.status_code, 200)
+        customer_id = customer_create.json()["id"]
+
+        job_create = self.client.post("/api/v1/jobs", json=self._create_job_payload("A-RES-FLOW-1"), headers=headers)
+        self.assertEqual(job_create.status_code, 201)
+        job_id = job_create.json()["id"]
+
+        slot_create = self.client.post(
+            "/api/v1/calendar/slots",
+            json={
+                "start": "2026-08-20T08:00:00Z",
+                "end": "2026-08-20T10:00:00Z",
+                "capacity": 2,
+                "enabled": True,
+                "blocked": False,
+                "technician": "Pavel",
+                "location": "Praha",
+            },
+            headers=headers,
+        )
+        self.assertEqual(slot_create.status_code, 201)
+        slot_id = slot_create.json()["id"]
+
+        create_request = self.client.post(
+            "/api/v1/reservations",
+            json={"job_id": job_id, "customer_id": customer_id},
+            headers=headers,
+        )
+        self.assertEqual(create_request.status_code, 201)
+        token = create_request.json()["token"]
+
+        status_check = self.client.get(f"/api/v1/reservations/public/{token}")
+        self.assertEqual(status_check.status_code, 200)
+        self.assertFalse(status_check.json()["token_used"])
+
+        available = self.client.get(
+            "/api/v1/reservations/public/"
+            + token
+            + "/available-slots?start=2026-08-20T00:00:00Z&end=2026-08-21T00:00:00Z&required_capacity=1"
+        )
+        self.assertEqual(available.status_code, 200)
+        self.assertEqual(len(available.json()["items"]), 1)
+
+        confirm = self.client.post(
+            "/api/v1/reservations/public/confirm",
+            json={"token": token, "slot_id": slot_id},
+        )
+        self.assertEqual(confirm.status_code, 200)
+        body = confirm.json()
+        self.assertEqual(body["status"], "confirmed")
+        self.assertTrue(body["token_used"])
+        self.assertIsNotNone(body["confirmation_sent_at"])
+
+        with self.SessionLocal() as db:
+            logs = db.query(SmsLog).filter(SmsLog.type == "reservation_confirmation").all()
+            self.assertGreaterEqual(len(logs), 1)
+            self.assertEqual(logs[-1].status, "sent")
 
     def test_upload_pdf_creates_record_per_page(self) -> None:
         headers, _ = self._login_admin()

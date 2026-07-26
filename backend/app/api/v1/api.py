@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, calendar, health, jobs, modules, uploads, customers
+from app.api.v1.endpoints import auth, calendar, customers, health, jobs, modules, reservations, uploads
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -10,3 +10,4 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
 api_router.include_router(uploads.router, prefix="/uploads", tags=["uploads"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
+api_router.include_router(reservations.router, prefix="/reservations", tags=["reservations"])

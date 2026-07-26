@@ -79,6 +79,25 @@ class ReservationService:
         self.db.refresh(reservation)
         return reservation
 
+    def get_reservation(self, reservation_id: int) -> Reservation:
+        reservation = self.db.scalar(select(Reservation).where(Reservation.id == reservation_id))
+        if not reservation:
+            raise ReservationNotFoundError("Reservation not found")
+        return reservation
+
+    def get_reservation_by_token(self, *, token: str, must_be_active: bool = False) -> Reservation:
+        reservation = self.db.scalar(select(Reservation).where(Reservation.token == token))
+        if not reservation:
+            raise ReservationNotFoundError("Reservation token not found")
+
+        if must_be_active:
+            now = utc_now()
+            if reservation.token_expires_at and as_utc(reservation.token_expires_at) < now:
+                raise ReservationTokenExpiredError("Reservation token expired")
+            if reservation.token_used:
+                raise ReservationTokenExpiredError("Reservation token already used")
+        return reservation
+
     def confirm_reservation(self, *, token: str, slot_id: int) -> Reservation:
         reservation = self._reservation_by_token_query(for_update=True).where(Reservation.token == token)
         reservation_obj = self.db.scalar(reservation)
