@@ -126,6 +126,7 @@ def dashboard_summary(
         recent_jobs=[_job_to_read(job) for job in data["recent_jobs"]],
         overdue_jobs=[_job_to_read(job) for job in data["overdue_jobs"]],
         today_installations=[_job_to_read(job) for job in data["today_installations"]],
+        pipeline_counts=data.get("pipeline_counts", {}),
     )
 
 

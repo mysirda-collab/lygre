@@ -5,7 +5,10 @@ import { usePathname, useRouter } from 'next/navigation';
 
 import { getStoredAccessToken } from '@/lib/auth';
 
-const PUBLIC_PATHS = new Set(['/login']);
+function isPublicPath(pathname: string | null): boolean {
+  if (!pathname) return false;
+  return pathname === '/login' || pathname.startsWith('/reservation');
+}
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -14,14 +17,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const token = getStoredAccessToken();
-    const isPublicPath = pathname ? PUBLIC_PATHS.has(pathname) : false;
+    const publicPath = isPublicPath(pathname);
 
-    if (!token && !isPublicPath) {
+    if (!token && !publicPath) {
       router.replace('/login');
       return;
     }
 
-    if (token && isPublicPath) {
+    if (token && pathname === '/login') {
       router.replace('/');
       return;
     }

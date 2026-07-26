@@ -10,6 +10,7 @@ from app.schemas.reservation import (
     ReservationAvailabilityListResponse,
     ReservationConfirmRequest,
     ReservationCreateRequest,
+    ReservationPublicContext,
     ReservationPublicStatus,
     ReservationRead,
 )
@@ -79,6 +80,16 @@ def reservation_public_status(token: str, db: Session = Depends(get_db)) -> Rese
         token_expires_at=reservation.token_expires_at,
         token_used=reservation.token_used,
     )
+
+
+@router.get("/public/{token}/context", response_model=ReservationPublicContext, summary="Public reservation context")
+def reservation_public_context(token: str, db: Session = Depends(get_db)) -> ReservationPublicContext:
+    service = _reservation_service(db)
+    try:
+        payload = service.get_public_context_by_token(token=token)
+    except Exception as exc:
+        _raise_reservation_http_error(exc)
+    return ReservationPublicContext.model_validate(payload)
 
 
 @router.get(

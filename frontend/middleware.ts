@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-const PUBLIC_PATHS = ['/login'];
+const PUBLIC_PATHS = ['/login', '/reservation'];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -15,7 +15,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  if (accessToken && isPublic) {
+  if (accessToken && pathname === '/login') {
     const dashboardUrl = request.nextUrl.clone();
     dashboardUrl.pathname = '/';
     return NextResponse.redirect(dashboardUrl);

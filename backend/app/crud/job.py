@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
 from app.models.job import Job
+from app.models.reservation import Reservation
+from app.models.time_slot import TimeSlot
 from app.models.upload import Upload
 
 
@@ -180,11 +182,64 @@ def get_dashboard_summary(db: Session) -> dict[str, Any]:
         .limit(20)
     ).all()
 
+    tomorrow_start = today_start.replace(day=today_start.day) + timedelta(days=1)
+    tomorrow_end = tomorrow_start.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    # Pipeline metrics for reservation workflow cards.
+    new_imports = db.scalar(
+        select(func.count(Job.id)).where(Job.is_deleted.is_(False), Job.status == "new")
+    )
+    waiting_sms = db.scalar(
+        select(func.count(Reservation.id)).where(
+            Reservation.status == "confirmed",
+            Reservation.confirmation_sent_at.is_(None),
+        )
+    )
+    waiting_reservation = db.scalar(
+        select(func.count(Reservation.id)).where(
+            Reservation.status == "requested",
+            Reservation.token_used.is_(False),
+        )
+    )
+    reservation_confirmed = db.scalar(
+        select(func.count(Reservation.id)).where(Reservation.status == "confirmed")
+    )
+    installation_today = db.scalar(
+        select(func.count(Reservation.id))
+        .join(TimeSlot, TimeSlot.id == Reservation.slot_id)
+        .where(
+            Reservation.status == "confirmed",
+            TimeSlot.start >= today_start,
+            TimeSlot.start <= today_end,
+        )
+    )
+    installation_tomorrow = db.scalar(
+        select(func.count(Reservation.id))
+        .join(TimeSlot, TimeSlot.id == Reservation.slot_id)
+        .where(
+            Reservation.status == "confirmed",
+            TimeSlot.start >= tomorrow_start,
+            TimeSlot.start <= tomorrow_end,
+        )
+    )
+    completed = db.scalar(
+        select(func.count(Job.id)).where(Job.is_deleted.is_(False), Job.status == "done")
+    )
+
     return {
         "status_counts": status_counts,
         "recent_jobs": list(recent_jobs),
         "overdue_jobs": list(overdue_jobs),
         "today_installations": list(today_installations),
+        "pipeline_counts": {
+            "new_imports": int(new_imports or 0),
+            "waiting_sms": int(waiting_sms or 0),
+            "waiting_reservation": int(waiting_reservation or 0),
+            "reservation_confirmed": int(reservation_confirmed or 0),
+            "installation_today": int(installation_today or 0),
+            "installation_tomorrow": int(installation_tomorrow or 0),
+            "completed": int(completed or 0),
+        },
     }
 
 

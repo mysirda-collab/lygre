@@ -4,24 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { UserMenu } from "@/components/UserMenu";
-import { authFetch } from "@/lib/auth";
-
-type Job = {
-  id: number;
-  job_number: string;
-  status: string;
-  priority: string;
-  customer_name: string;
-  technician?: string | null;
-  installation_date?: string | null;
-};
-
-type DashboardSummary = {
-  status_counts: Record<string, number>;
-  recent_jobs: Job[];
-  overdue_jobs: Job[];
-  today_installations: Job[];
-};
+import { DashboardJob, DashboardSummary, getDashboardSummary } from "@/lib/services/dashboard";
 
 const statusTitle: Record<string, string> = {
   new: "Nove",
@@ -30,7 +13,27 @@ const statusTitle: Record<string, string> = {
   cancelled: "Zrusene",
 };
 
-function CompactJobList({ title, jobs }: { title: string; jobs: Job[] }) {
+const pipelineTitle: Record<string, string> = {
+  new_imports: "Nove importy",
+  waiting_sms: "Ceka na SMS",
+  waiting_reservation: "Ceka na rezervaci",
+  reservation_confirmed: "Rezervace potvrzena",
+  installation_today: "Instalace dnes",
+  installation_tomorrow: "Instalace zitra",
+  completed: "Dokonceno",
+};
+
+const pipelineOrder = [
+  "new_imports",
+  "waiting_sms",
+  "waiting_reservation",
+  "reservation_confirmed",
+  "installation_today",
+  "installation_tomorrow",
+  "completed",
+];
+
+function CompactJobList({ title, jobs }: { title: string; jobs: DashboardJob[] }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-slate-600">{title}</h2>
@@ -63,11 +66,8 @@ export default function DashboardPage() {
     const loadSummary = async () => {
       try {
         setLoading(true);
-        const response = await authFetch("/api/v1/jobs/dashboard/summary");
-        if (!response.ok) {
-          throw new Error("Nepodarilo se nacist dashboard");
-        }
-        const data = (await response.json()) as DashboardSummary;
+        setError(null);
+        const data = await getDashboardSummary();
         setSummary(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Neocekavana chyba dashboardu");
@@ -80,6 +80,7 @@ export default function DashboardPage() {
   }, []);
 
   const statusCounts = summary?.status_counts || {};
+  const pipelineCounts = summary?.pipeline_counts || {};
   const statuses = ["new", "scheduled", "done", "cancelled"];
 
   return (
@@ -103,6 +104,19 @@ export default function DashboardPage() {
                 <div className="mt-3 h-8 w-16 animate-pulse rounded bg-slate-100" />
               ) : (
                 <div className="mt-3 text-3xl font-bold text-slate-900">{statusCounts[key] || 0}</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {pipelineOrder.map((key) => (
+            <div key={key} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">{pipelineTitle[key]}</div>
+              {loading ? (
+                <div className="mt-3 h-8 w-16 animate-pulse rounded bg-slate-100" />
+              ) : (
+                <div className="mt-3 text-3xl font-bold text-slate-900">{pipelineCounts[key] || 0}</div>
               )}
             </div>
           ))}

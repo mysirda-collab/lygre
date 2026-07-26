@@ -492,6 +492,15 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(status_check.status_code, 200)
         self.assertFalse(status_check.json()["token_used"])
 
+        context_before = self.client.get(f"/api/v1/reservations/public/{token}/context")
+        self.assertEqual(context_before.status_code, 200)
+        context_body = context_before.json()
+        self.assertEqual(context_body["customer_name"], "Zakaznik Rezervace")
+        self.assertEqual(context_body["job_number"], "A-RES-FLOW-1")
+        self.assertEqual(context_body["reservation_status"], "requested")
+        self.assertTrue(context_body["can_confirm"])
+        self.assertIsNone(context_body["selected_slot"])
+
         available = self.client.get(
             "/api/v1/reservations/public/"
             + token
@@ -509,6 +518,15 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(body["status"], "confirmed")
         self.assertTrue(body["token_used"])
         self.assertIsNotNone(body["confirmation_sent_at"])
+
+        context_after = self.client.get(f"/api/v1/reservations/public/{token}/context")
+        self.assertEqual(context_after.status_code, 200)
+        context_after_body = context_after.json()
+        self.assertEqual(context_after_body["reservation_status"], "confirmed")
+        self.assertFalse(context_after_body["can_confirm"])
+        self.assertTrue(context_after_body["token_used"])
+        self.assertIsNotNone(context_after_body["selected_slot"])
+        self.assertEqual(context_after_body["selected_slot"]["id"], slot_id)
 
         with self.SessionLocal() as db:
             logs = db.query(SmsLog).filter(SmsLog.type == "reservation_confirmation").all()

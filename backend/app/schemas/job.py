@@ -163,3 +163,4 @@ class DashboardSummaryResponse(BaseModel):
     recent_jobs: list[JobRead]
     overdue_jobs: list[JobRead]
     today_installations: list[JobRead]
+    pipeline_counts: dict[str, int] = {}

@@ -98,6 +98,41 @@ class ReservationService:
                 raise ReservationTokenExpiredError("Reservation token already used")
         return reservation
 
+    def get_public_context_by_token(self, *, token: str) -> dict[str, object | None]:
+        reservation = self.get_reservation_by_token(token=token)
+        customer = self.db.scalar(select(Customer).where(Customer.id == reservation.customer_id))
+        job = self.db.scalar(select(Job).where(Job.id == reservation.job_id, Job.is_deleted.is_(False)))
+        slot = self.db.scalar(select(TimeSlot).where(TimeSlot.id == reservation.slot_id)) if reservation.slot_id else None
+
+        now = utc_now()
+        token_expired = bool(reservation.token_expires_at and as_utc(reservation.token_expires_at) < now)
+        can_confirm = (
+            reservation.status == "requested"
+            and reservation.token_used is False
+            and token_expired is False
+        )
+
+        selected_slot: dict[str, object | None] | None = None
+        if slot:
+            selected_slot = {
+                "id": slot.id,
+                "start": slot.start,
+                "end": slot.end,
+                "title": slot.title,
+                "location": slot.location,
+                "installation_type": slot.installation_type,
+            }
+
+        return {
+            "customer_name": customer.name if customer else None,
+            "job_number": job.job_number if job else None,
+            "reservation_status": reservation.status,
+            "token_expires_at": reservation.token_expires_at,
+            "token_used": reservation.token_used,
+            "can_confirm": can_confirm,
+            "selected_slot": selected_slot,
+        }
+
     def list_due_reminder_reservation_ids(
         self,
         *,

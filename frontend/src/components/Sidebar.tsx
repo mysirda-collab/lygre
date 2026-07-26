@@ -17,7 +17,7 @@ const links = [
 export function Sidebar() {
   const pathname = usePathname();
 
-  if (pathname === '/login') {
+  if (pathname === '/login' || pathname.startsWith('/reservation')) {
     return null;
   }
 

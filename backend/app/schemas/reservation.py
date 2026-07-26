@@ -42,3 +42,22 @@ class ReservationConfirmRequest(BaseModel):
 
 class ReservationAvailabilityListResponse(BaseModel):
     items: list[TimeSlotAvailabilityRead]
+
+
+class ReservationPublicSelectedSlot(BaseModel):
+    id: int
+    start: datetime
+    end: datetime
+    title: str | None
+    location: str | None
+    installation_type: str | None
+
+
+class ReservationPublicContext(BaseModel):
+    customer_name: str | None
+    job_number: str | None
+    reservation_status: str
+    token_expires_at: datetime | None
+    token_used: bool
+    can_confirm: bool
+    selected_slot: ReservationPublicSelectedSlot | None

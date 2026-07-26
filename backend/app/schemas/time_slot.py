@@ -64,6 +64,8 @@ class TimeSlotRead(BaseModel):
     location: str | None
     note: str | None
     installation_type: str | None
+    occupied_capacity: int = Field(default=0, ge=0)
+    remaining_capacity: int = Field(default=0, ge=0)
     created_at: datetime
     updated_at: datetime
 

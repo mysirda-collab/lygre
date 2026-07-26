@@ -52,6 +52,29 @@ def _slot_service(db: Session) -> CalendarService:
     return CalendarService(db)
 
 
+def _slot_to_read(service: CalendarService, slot) -> TimeSlotRead:
+    remaining = service.get_remaining_capacity(slot.id)
+    occupied = max(0, slot.capacity - remaining)
+    payload = {
+        "id": slot.id,
+        "start": slot.start,
+        "end": slot.end,
+        "capacity": slot.capacity,
+        "enabled": slot.enabled,
+        "blocked": slot.blocked,
+        "technician": slot.technician,
+        "title": slot.title,
+        "location": slot.location,
+        "note": slot.note,
+        "installation_type": slot.installation_type,
+        "occupied_capacity": occupied,
+        "remaining_capacity": remaining,
+        "created_at": slot.created_at,
+        "updated_at": slot.updated_at,
+    }
+    return TimeSlotRead.model_validate(payload)
+
+
 def _raise_slot_http_error(exc: Exception) -> None:
     if isinstance(exc, TimeSlotNotFoundError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -82,7 +105,7 @@ def list_slots(
         installation_type=installation_type,
         include_blocked=include_blocked,
     )
-    return TimeSlotListResponse(items=[TimeSlotRead.model_validate(slot) for slot in items])
+    return TimeSlotListResponse(items=[_slot_to_read(service, slot) for slot in items])
 
 
 @router.get("/slots/{slot_id}", response_model=TimeSlotRead, summary="Get time slot")
@@ -96,7 +119,7 @@ def get_slot(
         slot = service.get_slot(slot_id)
     except Exception as exc:
         _raise_slot_http_error(exc)
-    return TimeSlotRead.model_validate(slot)
+    return _slot_to_read(service, slot)
 
 
 @router.post("/slots", response_model=TimeSlotRead, status_code=status.HTTP_201_CREATED, summary="Create time slot")
@@ -123,7 +146,7 @@ def create_slot(
         )
     except Exception as exc:
         _raise_slot_http_error(exc)
-    return TimeSlotRead.model_validate(created)
+    return _slot_to_read(service, created)
 
 
 @router.put("/slots/{slot_id}", response_model=TimeSlotRead, summary="Update time slot")
@@ -152,7 +175,7 @@ def update_slot(
         )
     except Exception as exc:
         _raise_slot_http_error(exc)
-    return TimeSlotRead.model_validate(updated)
+    return _slot_to_read(service, updated)
 
 
 @router.patch("/slots/{slot_id}/block", response_model=TimeSlotRead, summary="Block or unblock slot")
@@ -167,7 +190,7 @@ def block_slot(
         updated = service.block_slot(slot_id, blocked=payload.blocked, disable=payload.disable)
     except Exception as exc:
         _raise_slot_http_error(exc)
-    return TimeSlotRead.model_validate(updated)
+    return _slot_to_read(service, updated)
 
 
 @router.get("/available-slots", response_model=TimeSlotAvailabilityListResponse, summary="List available slots")
@@ -197,7 +220,7 @@ def available_slots(
     return TimeSlotAvailabilityListResponse(
         items=[
             TimeSlotAvailabilityRead(
-                slot=TimeSlotRead.model_validate(item.slot),
+                slot=_slot_to_read(service, item.slot),
                 remaining_capacity=item.remaining_capacity,
             )
             for item in items
