@@ -21,6 +21,7 @@ from app.models.job import Job
 from app.models.reservation import Reservation
 from app.services.calendar_service import (
     CalendarService,
+    TimeSlotCapacityError,
     TimeSlotConflictError,
     TimeSlotCreateData,
     TimeSlotUpdateData,
@@ -180,3 +181,47 @@ def test_list_available_slots_respects_capacity(db_session: Session) -> None:
     )
 
     assert len(available) == 0
+
+
+def test_update_slot_rejects_capacity_below_confirmed_count(db_session: Session) -> None:
+    svc = CalendarService(db_session)
+    customer, job = _seed_customer_job(db_session)
+    now = datetime.now(UTC)
+    slot = svc.create_slot(
+        TimeSlotCreateData(
+            start=now + timedelta(days=1),
+            end=now + timedelta(days=1, hours=2),
+            capacity=2,
+            technician="Pavel",
+            location="Praha",
+        )
+    )
+
+    first = Reservation(
+        job_id=job.id,
+        customer_id=customer.id,
+        slot_id=slot.id,
+        token="token-c1",
+        token_expires_at=now + timedelta(days=2),
+        token_used=True,
+        status="confirmed",
+        created_at=now,
+        updated_at=now,
+    )
+    second = Reservation(
+        job_id=job.id,
+        customer_id=customer.id,
+        slot_id=slot.id,
+        token="token-c2",
+        token_expires_at=now + timedelta(days=2),
+        token_used=True,
+        status="confirmed",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(first)
+    db_session.add(second)
+    db_session.commit()
+
+    with pytest.raises(TimeSlotCapacityError):
+        svc.update_slot(slot.id, TimeSlotUpdateData(capacity=1))

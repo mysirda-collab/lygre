@@ -357,6 +357,77 @@ class ApiIntegrationTest(unittest.TestCase):
             logs = db.query(AuditLog).filter(AuditLog.entity_type == "calendar_event").all()
             self.assertGreaterEqual(len(logs), 3)
 
+    def test_calendar_slots_crud_and_availability(self) -> None:
+        headers, _ = self._login_admin()
+
+        create = self.client.post(
+            "/api/v1/calendar/slots",
+            json={
+                "start": "2026-08-10T08:00:00Z",
+                "end": "2026-08-10T10:00:00Z",
+                "capacity": 2,
+                "enabled": True,
+                "blocked": False,
+                "technician": "Pavel",
+                "title": "Montaz rano",
+                "location": "Praha",
+                "installation_type": "Standard",
+            },
+            headers=headers,
+        )
+        self.assertEqual(create.status_code, 201)
+        slot_id = create.json()["id"]
+
+        conflict = self.client.post(
+            "/api/v1/calendar/slots",
+            json={
+                "start": "2026-08-10T09:00:00Z",
+                "end": "2026-08-10T11:00:00Z",
+                "capacity": 1,
+                "enabled": True,
+                "blocked": False,
+                "technician": "Pavel",
+                "location": "Brno",
+                "installation_type": "Standard",
+            },
+            headers=headers,
+        )
+        self.assertEqual(conflict.status_code, 409)
+
+        update = self.client.put(
+            f"/api/v1/calendar/slots/{slot_id}",
+            json={
+                "capacity": 3,
+                "location": "Praha 1",
+            },
+            headers=headers,
+        )
+        self.assertEqual(update.status_code, 200)
+        self.assertEqual(update.json()["capacity"], 3)
+
+        available_before_block = self.client.get(
+            "/api/v1/calendar/available-slots?start=2026-08-10T07:00:00Z&end=2026-08-10T12:00:00Z&technician=Pavel&required_capacity=1",
+            headers=headers,
+        )
+        self.assertEqual(available_before_block.status_code, 200)
+        self.assertEqual(len(available_before_block.json()["items"]), 1)
+
+        block = self.client.patch(
+            f"/api/v1/calendar/slots/{slot_id}/block",
+            json={"blocked": True, "disable": True},
+            headers=headers,
+        )
+        self.assertEqual(block.status_code, 200)
+        self.assertTrue(block.json()["blocked"])
+        self.assertFalse(block.json()["enabled"])
+
+        available_after_block = self.client.get(
+            "/api/v1/calendar/available-slots?start=2026-08-10T07:00:00Z&end=2026-08-10T12:00:00Z&technician=Pavel&required_capacity=1",
+            headers=headers,
+        )
+        self.assertEqual(available_after_block.status_code, 200)
+        self.assertEqual(len(available_after_block.json()["items"]), 0)
+
     def test_upload_pdf_creates_record_per_page(self) -> None:
         headers, _ = self._login_admin()
 

@@ -18,6 +18,24 @@ from app.crud.calendar_event import (
 from app.dependencies.auth import require_roles
 from app.dependencies.database import get_db
 from app.models.user import User, UserRole
+from app.schemas.time_slot import (
+    TimeSlotAvailabilityListResponse,
+    TimeSlotAvailabilityRead,
+    TimeSlotBlockRequest,
+    TimeSlotCreate,
+    TimeSlotListResponse,
+    TimeSlotRead,
+    TimeSlotUpdate,
+)
+from app.services.calendar_service import (
+    CalendarService,
+    TimeSlotCapacityError,
+    TimeSlotConflictError,
+    TimeSlotCreateData,
+    TimeSlotNotFoundError,
+    TimeSlotUpdateData,
+    TimeSlotValidationError,
+)
 from app.schemas.calendar_event import (
     CalendarEventCreate,
     CalendarEventListResponse,
@@ -28,6 +46,163 @@ from app.schemas.calendar_event import (
 )
 
 router = APIRouter()
+
+
+def _slot_service(db: Session) -> CalendarService:
+    return CalendarService(db)
+
+
+def _raise_slot_http_error(exc: Exception) -> None:
+    if isinstance(exc, TimeSlotNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, TimeSlotConflictError):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, (TimeSlotValidationError, TimeSlotCapacityError)):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    raise exc
+
+
+@router.get("/slots", response_model=TimeSlotListResponse, summary="List time slots")
+def list_slots(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    technician: str | None = Query(default=None),
+    location: str | None = Query(default=None),
+    installation_type: str | None = Query(default=None),
+    include_blocked: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> TimeSlotListResponse:
+    service = _slot_service(db)
+    items = service.list_slots(
+        start_from=start,
+        end_to=end,
+        technician=technician,
+        location=location,
+        installation_type=installation_type,
+        include_blocked=include_blocked,
+    )
+    return TimeSlotListResponse(items=[TimeSlotRead.model_validate(slot) for slot in items])
+
+
+@router.get("/slots/{slot_id}", response_model=TimeSlotRead, summary="Get time slot")
+def get_slot(
+    slot_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> TimeSlotRead:
+    service = _slot_service(db)
+    try:
+        slot = service.get_slot(slot_id)
+    except Exception as exc:
+        _raise_slot_http_error(exc)
+    return TimeSlotRead.model_validate(slot)
+
+
+@router.post("/slots", response_model=TimeSlotRead, status_code=status.HTTP_201_CREATED, summary="Create time slot")
+def create_slot(
+    payload: TimeSlotCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER)),
+) -> TimeSlotRead:
+    service = _slot_service(db)
+    try:
+        created = service.create_slot(
+            TimeSlotCreateData(
+                start=payload.start,
+                end=payload.end,
+                capacity=payload.capacity,
+                enabled=payload.enabled,
+                blocked=payload.blocked,
+                technician=payload.technician,
+                title=payload.title,
+                location=payload.location,
+                note=payload.note,
+                installation_type=payload.installation_type,
+            )
+        )
+    except Exception as exc:
+        _raise_slot_http_error(exc)
+    return TimeSlotRead.model_validate(created)
+
+
+@router.put("/slots/{slot_id}", response_model=TimeSlotRead, summary="Update time slot")
+def update_slot(
+    slot_id: int,
+    payload: TimeSlotUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER)),
+) -> TimeSlotRead:
+    service = _slot_service(db)
+    try:
+        updated = service.update_slot(
+            slot_id,
+            TimeSlotUpdateData(
+                start=payload.start,
+                end=payload.end,
+                capacity=payload.capacity,
+                enabled=payload.enabled,
+                blocked=payload.blocked,
+                technician=payload.technician,
+                title=payload.title,
+                location=payload.location,
+                note=payload.note,
+                installation_type=payload.installation_type,
+            ),
+        )
+    except Exception as exc:
+        _raise_slot_http_error(exc)
+    return TimeSlotRead.model_validate(updated)
+
+
+@router.patch("/slots/{slot_id}/block", response_model=TimeSlotRead, summary="Block or unblock slot")
+def block_slot(
+    slot_id: int,
+    payload: TimeSlotBlockRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER)),
+) -> TimeSlotRead:
+    service = _slot_service(db)
+    try:
+        updated = service.block_slot(slot_id, blocked=payload.blocked, disable=payload.disable)
+    except Exception as exc:
+        _raise_slot_http_error(exc)
+    return TimeSlotRead.model_validate(updated)
+
+
+@router.get("/available-slots", response_model=TimeSlotAvailabilityListResponse, summary="List available slots")
+def available_slots(
+    start: datetime = Query(...),
+    end: datetime = Query(...),
+    technician: str | None = Query(default=None),
+    location: str | None = Query(default=None),
+    installation_type: str | None = Query(default=None),
+    required_capacity: int = Query(default=1, ge=1),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> TimeSlotAvailabilityListResponse:
+    service = _slot_service(db)
+    try:
+        items = service.list_available_slots(
+            start_from=start,
+            end_to=end,
+            technician=technician,
+            location=location,
+            installation_type=installation_type,
+            required_capacity=required_capacity,
+        )
+    except Exception as exc:
+        _raise_slot_http_error(exc)
+
+    return TimeSlotAvailabilityListResponse(
+        items=[
+            TimeSlotAvailabilityRead(
+                slot=TimeSlotRead.model_validate(item.slot),
+                remaining_capacity=item.remaining_capacity,
+            )
+            for item in items
+        ]
+    )
 
 
 def _validate_references(db: Session, *, job_id: int, technician_id: int) -> None:

@@ -70,11 +70,48 @@ class TimeSlotValidationError(CalendarServiceError):
     pass
 
 
+class TimeSlotCapacityError(TimeSlotValidationError):
+    pass
+
+
 class CalendarService:
     ACTIVE_RESERVATION_STATUSES = {"confirmed"}
 
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    def get_slot(self, slot_id: int) -> TimeSlot:
+        slot = self.db.scalar(select(TimeSlot).where(TimeSlot.id == slot_id))
+        if not slot:
+            raise TimeSlotNotFoundError("Slot not found")
+        return slot
+
+    def list_slots(
+        self,
+        *,
+        start_from: datetime | None = None,
+        end_to: datetime | None = None,
+        technician: str | None = None,
+        location: str | None = None,
+        installation_type: str | None = None,
+        include_blocked: bool = True,
+    ) -> list[TimeSlot]:
+        query: Select[tuple[TimeSlot]] = select(TimeSlot)
+
+        if start_from is not None:
+            query = query.where(TimeSlot.end > as_utc(start_from))
+        if end_to is not None:
+            query = query.where(TimeSlot.start < as_utc(end_to))
+        if technician is not None:
+            query = query.where(TimeSlot.technician == technician)
+        if location is not None:
+            query = query.where(TimeSlot.location == location)
+        if installation_type is not None:
+            query = query.where(TimeSlot.installation_type == installation_type)
+        if not include_blocked:
+            query = query.where(TimeSlot.blocked.is_(False))
+
+        return self.db.scalars(query.order_by(TimeSlot.start.asc(), TimeSlot.id.asc())).all()
 
     def create_slot(self, payload: TimeSlotCreateData) -> TimeSlot:
         start = as_utc(payload.start)
@@ -122,6 +159,12 @@ class CalendarService:
 
         self._validate_slot_range(new_start, new_end)
         self._validate_capacity(new_capacity)
+
+        confirmed_reservations = self._count_confirmed_reservations(slot.id)
+        if new_capacity < confirmed_reservations:
+            raise TimeSlotCapacityError(
+                "Slot capacity cannot be lower than number of confirmed reservations"
+            )
 
         if self.has_time_conflict(
             start=new_start,
@@ -234,13 +277,17 @@ class CalendarService:
         slot = self.db.scalar(select(TimeSlot).where(TimeSlot.id == slot_id))
         if not slot:
             raise TimeSlotNotFoundError("Slot not found")
+        used = self._count_confirmed_reservations(slot.id)
+        return max(0, slot.capacity - (used or 0))
+
+    def _count_confirmed_reservations(self, slot_id: int) -> int:
         used = self.db.scalar(
             select(func.count(Reservation.id)).where(
-                Reservation.slot_id == slot.id,
+                Reservation.slot_id == slot_id,
                 Reservation.status.in_(self.ACTIVE_RESERVATION_STATUSES),
             )
         )
-        return max(0, slot.capacity - (used or 0))
+        return int(used or 0)
 
     def _get_slot_for_update(self, slot_id: int) -> TimeSlot:
         stmt: Select[tuple[TimeSlot]] = select(TimeSlot).where(TimeSlot.id == slot_id).with_for_update()
