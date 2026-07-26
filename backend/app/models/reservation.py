@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Boolean
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -7,6 +7,13 @@ from app.models.base import Base
 
 class Reservation(Base):
     __tablename__ = "reservations"
+    __table_args__ = (
+        Index("ix_reservations_slot_id", "slot_id"),
+        Index("ix_reservations_customer_status_created", "customer_id", "status", "created_at"),
+        Index("ix_reservations_status_slot", "status", "slot_id"),
+        Index("ix_reservations_token_used_expires", "token_used", "token_expires_at"),
+        Index("ix_reservations_job_created", "job_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
@@ -25,3 +32,4 @@ class Reservation(Base):
     job = relationship("Job", back_populates="reservations")
     customer = relationship("Customer", back_populates="reservations")
     slot = relationship("TimeSlot", back_populates="reservations")
+    sms_logs = relationship("SmsLog", back_populates="reservation")

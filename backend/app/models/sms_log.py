@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -7,6 +7,18 @@ from app.models.base import Base
 
 class SmsLog(Base):
     __tablename__ = "sms_logs"
+    __table_args__ = (
+        Index("ix_sms_logs_customer", "customer_id"),
+        Index("ix_sms_logs_reservation_created", "reservation_id", "created_at"),
+        Index("ix_sms_logs_status_created", "status", "created_at"),
+        Index(
+            "ix_sms_logs_provider_external_message_id",
+            "provider",
+            "external_message_id",
+            unique=True,
+            postgresql_where=text("external_message_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     customer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("customers.id", ondelete="SET NULL"), nullable=True)
@@ -25,4 +37,4 @@ class SmsLog(Base):
 
     customer = relationship("Customer", back_populates="sms_logs")
     job = relationship("Job", back_populates="sms_logs")
-    reservation = relationship("Reservation")
+    reservation = relationship("Reservation", back_populates="sms_logs")

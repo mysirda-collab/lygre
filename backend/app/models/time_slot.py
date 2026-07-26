@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, Boolean
+from sqlalchemy import String, Integer, DateTime, Boolean, Index, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -7,6 +7,14 @@ from app.models.base import Base
 
 class TimeSlot(Base):
     __tablename__ = "time_slots"
+    __table_args__ = (
+        Index("ix_time_slots_start_end", "start", "end"),
+        Index("ix_time_slots_enabled_blocked_start", "enabled", "blocked", "start"),
+        Index("ix_time_slots_technician_start_end", "technician", "start", "end"),
+        Index("ix_time_slots_location_start", "location", "start"),
+        CheckConstraint('"start" < "end"', name="ck_time_slots_start_before_end"),
+        CheckConstraint("capacity >= 1", name="ck_time_slots_capacity_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
