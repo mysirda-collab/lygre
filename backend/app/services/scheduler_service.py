@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from app.models.reservation import Reservation
-from app.models.time_slot import TimeSlot
 from app.services.notification_service import NotificationService
+from app.services.reservation_service import ReservationService
 
 
 def utc_now() -> datetime:
@@ -15,29 +13,25 @@ def utc_now() -> datetime:
 
 
 class SchedulerService:
-    def __init__(self, db: Session, notification_service: NotificationService) -> None:
+    def __init__(
+        self,
+        db: Session,
+        notification_service: NotificationService,
+        reservation_service: ReservationService | None = None,
+    ) -> None:
         self.db = db
         self.notification_service = notification_service
+        self.reservation_service = reservation_service or ReservationService(db)
 
     def process_due_reminders(self, *, now: datetime | None = None, reminder_window_hours: int = 24) -> int:
         current = now or utc_now()
-        horizon = current + timedelta(hours=reminder_window_hours)
-
-        stmt: Select[tuple[Reservation]] = (
-            select(Reservation)
-            .join(TimeSlot, TimeSlot.id == Reservation.slot_id)
-            .where(
-                Reservation.status == "confirmed",
-                Reservation.reminder_sent_at.is_(None),
-                TimeSlot.start >= current,
-                TimeSlot.start <= horizon,
-            )
-            .order_by(TimeSlot.start.asc())
+        reservation_ids = self.reservation_service.list_due_reminder_reservation_ids(
+            now=current,
+            reminder_window_hours=reminder_window_hours,
         )
-
-        reservations = self.db.scalars(stmt).all()
         sent = 0
-        for reservation in reservations:
+        for reservation_id in reservation_ids:
+            reservation = self.reservation_service.get_reservation(reservation_id)
             sms = self.notification_service.send_reservation_reminder(reservation)
             if sms.status == "sent":
                 sent += 1

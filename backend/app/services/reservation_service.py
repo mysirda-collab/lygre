@@ -98,6 +98,30 @@ class ReservationService:
                 raise ReservationTokenExpiredError("Reservation token already used")
         return reservation
 
+    def list_due_reminder_reservation_ids(
+        self,
+        *,
+        now: datetime | None = None,
+        reminder_window_hours: int = 24,
+        limit: int = 500,
+    ) -> list[int]:
+        current = now or utc_now()
+        horizon = current + timedelta(hours=reminder_window_hours)
+        stmt = (
+            select(Reservation.id)
+            .join(TimeSlot, TimeSlot.id == Reservation.slot_id)
+            .where(
+                Reservation.status == "confirmed",
+                Reservation.reminder_sent_at.is_(None),
+                TimeSlot.start >= current,
+                TimeSlot.start <= horizon,
+            )
+            .order_by(TimeSlot.start.asc())
+            .limit(limit)
+        )
+        rows = self.db.scalars(stmt).all()
+        return list(rows)
+
     def confirm_reservation(self, *, token: str, slot_id: int) -> Reservation:
         reservation = self._reservation_by_token_query(for_update=True).where(Reservation.token == token)
         reservation_obj = self.db.scalar(reservation)

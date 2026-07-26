@@ -32,9 +32,29 @@ class NotificationService:
         self.provider = provider or DummySmsProvider()
 
     def send_reservation_confirmation(self, reservation: Reservation) -> SmsLog:
-        customer = self._get_customer(reservation.customer_id)
-        job = self._get_job(reservation.job_id)
-        slot = self._get_slot(reservation.slot_id) if reservation.slot_id is not None else None
+        locked = self._lock_reservation(reservation.id)
+        if locked.confirmation_sent_at is not None:
+            existing = self._get_latest_sms_log(locked.id, "reservation_confirmation")
+            if existing:
+                return existing
+            return self._create_skipped_log(
+                sms_type="reservation_confirmation",
+                customer_id=locked.customer_id,
+                job_id=locked.job_id,
+                reservation_id=locked.id,
+                reason="Confirmation already sent",
+            )
+
+        # Claim before send to prevent duplicate sends under concurrent workers.
+        locked.confirmation_sent_at = utc_now()
+        locked.updated_at = utc_now()
+        self.db.add(locked)
+        self.db.commit()
+        self.db.refresh(locked)
+
+        customer = self._get_customer(locked.customer_id)
+        job = self._get_job(locked.job_id)
+        slot = self._get_slot(locked.slot_id) if locked.slot_id is not None else None
 
         phone = customer.phone or job.phone
         context = {
@@ -58,20 +78,41 @@ class NotificationService:
             sms_type="reservation_confirmation",
             customer_id=customer.id,
             job_id=job.id,
-            reservation_id=reservation.id,
+            reservation_id=locked.id,
         )
-        if sms.status == "sent":
-            reservation.confirmation_sent_at = utc_now()
-            reservation.updated_at = utc_now()
-            self.db.add(reservation)
+        if sms.status != "sent":
+            # Release claim on failure so scheduler/API can retry later.
+            locked.confirmation_sent_at = None
+            locked.updated_at = utc_now()
+            self.db.add(locked)
             self.db.commit()
-            self.db.refresh(reservation)
+            self.db.refresh(locked)
         return sms
 
     def send_reservation_reminder(self, reservation: Reservation) -> SmsLog:
-        customer = self._get_customer(reservation.customer_id)
-        job = self._get_job(reservation.job_id)
-        slot = self._get_slot(reservation.slot_id) if reservation.slot_id is not None else None
+        locked = self._lock_reservation(reservation.id)
+        if locked.reminder_sent_at is not None:
+            existing = self._get_latest_sms_log(locked.id, "reservation_reminder")
+            if existing:
+                return existing
+            return self._create_skipped_log(
+                sms_type="reservation_reminder",
+                customer_id=locked.customer_id,
+                job_id=locked.job_id,
+                reservation_id=locked.id,
+                reason="Reminder already sent",
+            )
+
+        # Claim before send to prevent duplicate sends under concurrent workers.
+        locked.reminder_sent_at = utc_now()
+        locked.updated_at = utc_now()
+        self.db.add(locked)
+        self.db.commit()
+        self.db.refresh(locked)
+
+        customer = self._get_customer(locked.customer_id)
+        job = self._get_job(locked.job_id)
+        slot = self._get_slot(locked.slot_id) if locked.slot_id is not None else None
 
         phone = customer.phone or job.phone
         context = {
@@ -94,14 +135,15 @@ class NotificationService:
             sms_type="reservation_reminder",
             customer_id=customer.id,
             job_id=job.id,
-            reservation_id=reservation.id,
+            reservation_id=locked.id,
         )
-        if sms.status == "sent":
-            reservation.reminder_sent_at = utc_now()
-            reservation.updated_at = utc_now()
-            self.db.add(reservation)
+        if sms.status != "sent":
+            # Release claim on failure so scheduler can retry.
+            locked.reminder_sent_at = None
+            locked.updated_at = utc_now()
+            self.db.add(locked)
             self.db.commit()
-            self.db.refresh(reservation)
+            self.db.refresh(locked)
         return sms
 
     def send_sms(
@@ -174,3 +216,48 @@ class NotificationService:
         if not slot:
             raise NotificationServiceError("Slot not found")
         return slot
+
+    def _lock_reservation(self, reservation_id: int) -> Reservation:
+        reservation = self.db.scalar(
+            select(Reservation).where(Reservation.id == reservation_id).with_for_update()
+        )
+        if not reservation:
+            raise NotificationServiceError("Reservation not found")
+        return reservation
+
+    def _get_latest_sms_log(self, reservation_id: int, sms_type: str) -> SmsLog | None:
+        return self.db.scalar(
+            select(SmsLog)
+            .where(SmsLog.reservation_id == reservation_id, SmsLog.type == sms_type)
+            .order_by(SmsLog.created_at.desc(), SmsLog.id.desc())
+            .limit(1)
+        )
+
+    def _create_skipped_log(
+        self,
+        *,
+        sms_type: str,
+        customer_id: int | None,
+        job_id: int | None,
+        reservation_id: int | None,
+        reason: str,
+    ) -> SmsLog:
+        sms = SmsLog(
+            customer_id=customer_id,
+            job_id=job_id,
+            reservation_id=reservation_id,
+            type=sms_type,
+            provider=self.provider.name,
+            phone="",
+            text="",
+            status="skipped",
+            error=reason,
+            external_message_id=None,
+            created_at=utc_now(),
+            sent_at=utc_now(),
+            delivered_at=None,
+        )
+        self.db.add(sms)
+        self.db.commit()
+        self.db.refresh(sms)
+        return sms
