@@ -1,3 +1,26 @@
+# CHANGELOG
+
+## Unreleased
+
+- Fix: Stabilize Vodafone PDF parser to handle OCR garbles and QR extraction.
+
+What was fixed
+- Restored reliable OCR fallback for single-page PDFs.
+- Improved QR extraction using OpenCV QRCodeDetector and prefer QR job numbers.
+- Tightened `customer_name` regexes to avoid capturing service blocks.
+- Added explicit patterns to support OCR-garbled labels (e.g. `apiijmeni`, `pfijmeni`, `piijmeni`).
+
+Supported cases now
+- `Jméno a příjmení: Name Surname` and common OCR variants
+- `Jméno a pfijmeni`, `Jméno a piijmeni`, `Jménoapiijmeni` forms
+- Trailing OCR tokens like `i)` or `1D` adjacent to names are recognized in context and not mis-attributed when possible.
+
+Known OCR exceptions
+- Some PDFs include stray tokens such as `i)` or `1D` as part of the OCR output adjacent to the name; these are OCR artifacts (not parser bugs) in the provided PDFs. The parser attempts to stop capture before `objednavky` and related markers but will keep tokens that appear inside the raw OCR name token.
+- No heuristic trimming (length checks or AI) was added — changes are limited to regex improvements only.
+
+Notes
+- Changes are limited to `backend/app/services/pdf_parser_service.py` and related parser helpers.
 # Changelog
 
 All notable changes to this project will be documented in this file.
