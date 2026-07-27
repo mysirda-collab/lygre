@@ -17,6 +17,11 @@ except Exception:
 
 from pypdf import PdfReader
 from pypdf import PdfWriter
+import numpy as np
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 
 @dataclass
@@ -44,6 +49,16 @@ class PdfParserService:
 
             if not page_text:
                 page_text = self._extract_page_text_with_ocr(pdf_bytes, page_index)
+
+            # Try to extract QR job number from the single-page PDF bytes.
+            # If found and is a 7-digit number, prepend a canonical label so
+            # existing regex parser will pick it up as job_number.
+            try:
+                qr_job = self._extract_qr_job_number(page_pdf_bytes)
+                if qr_job:
+                    page_text = f"Číslo objednávky: {qr_job}\n" + (page_text or "")
+            except Exception:
+                pass
 
             sheet_texts = self._split_page_into_order_sheets(page_text)
             if not sheet_texts:
@@ -87,7 +102,12 @@ class PdfParserService:
         if convert_from_bytes is None or pytesseract is None:
             return ""
         try:
-            images = convert_from_bytes(pdf_bytes, first_page=page_number, last_page=page_number)
+            # pdf_bytes is expected to be a single-page PDF when called from
+            # _build_single_page_pdf_bytes(). In that case convert_from_bytes
+            # must be invoked with first_page=1, last_page=1. Passing the
+            # original page_number (absolute in the source PDF) here caused
+            # convert_from_bytes to return no images for many pages.
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1)
         except Exception:
             return ""
         if not images:
@@ -161,9 +181,38 @@ class PdfParserService:
                 pages.append(text.strip())
         return "\n".join(pages).strip()
 
+    def _extract_qr_job_number(self, page_pdf_bytes: bytes) -> str | None:
+        """Decode QR from single-page PDF bytes and return 7-digit job number if present."""
+        if cv2 is None:
+            return None
+        try:
+            images = convert_from_bytes(page_pdf_bytes, first_page=1, last_page=1)
+            if not images:
+                return None
+            img = images[0]
+            arr = np.array(img.convert('RGB'))
+            img_cv = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            detector = cv2.QRCodeDetector()
+            data, pts, _ = detector.detectAndDecode(img_cv)
+            if not data:
+                return None
+            # find a 7-digit number in data
+            m = re.search(r"\b(\d{7})\b", data)
+            if m:
+                return m.group(1)
+        except Exception:
+            return None
+        return None
+
     def parse_text(self, text: str) -> dict[str, Any]:
         normalized_lines = [re.sub(r"\s+", " ", line).strip() for line in (text or "").splitlines() if re.sub(r"\s+", " ", line).strip()]
         full_text = "\n".join(normalized_lines)
+
+        debug_run = False
+        if "hrubes" in full_text.lower():
+            debug_run = True
+            print("--- PDF PARSE DEBUG START (trigger: 'hrubes') ---")
+            print("full_text:\n", full_text)
 
         order_form_detected = self._is_order_form(full_text)
         order_form = self._parse_order_form_text(full_text) if order_form_detected else {}
@@ -171,10 +220,26 @@ class PdfParserService:
         values: dict[str, str] = {}
         for index, line in enumerate(normalized_lines):
             lowered = line.lower()
-            if re.search(r"(?:^|\s)(zakázka|job|objednávka|číslo zakázky)", lowered):
-                values["job_number"] = self._extract_value(line, index, normalized_lines)
-            elif re.search(r"(?:^|\s)(zákazník|jméno zákazníka|customer|name)", lowered):
-                values["customer_name"] = self._extract_value(line, index, normalized_lines)
+            if debug_run:
+                print(f"\n[LINE {index}] '{line}'")
+            # accept both diacritic and ascii variants, and common merged tokens
+            if re.search(r"(?:^|\s)(zakázka|job|objednávka|číslo\s*zakázky|cislo\s*objednavky|číslo\s*objednávky)", lowered):
+                if "job_number" not in values:
+                    if debug_run:
+                        print("  matched regex for job_number")
+                    extracted = self._extract_value(line, index, normalized_lines)
+                    if debug_run:
+                        print("  _extract_value returned:", repr(extracted))
+                    values["job_number"] = extracted
+            elif re.search(r"(?:^|\s)(zákazník|jméno\s*zákazníka|jménoa\b|jmenoa\b|jménoa\s*prijmeni|jmeno\s*a\s*prijmeni|jmenoa\s*prijmeni|customer|name)", lowered):
+                if "customer_name" not in values:
+                    if debug_run:
+                        print("  matched regex for customer_name (line-based)")
+                    extracted = self._extract_value(line, index, normalized_lines)
+                    if debug_run:
+                        print("  _extract_value returned:", repr(extracted))
+                        print("  setting customer_name first time")
+                    values["customer_name"] = extracted
             elif re.search(r"(?:^|\s)(telefon|phone|tel)", lowered):
                 values["phone"] = self._extract_value(line, index, normalized_lines)
             elif re.search(r"(?:^|\s)(e-mail|email|mail)", lowered):
@@ -201,10 +266,21 @@ class PdfParserService:
 
         cleaned = {key: self._clean_value(value) for key, value in values.items() if self._clean_value(value)}
 
+        if debug_run:
+            print("\n-- order_form detected values before merge:", order_form)
         for key, value in order_form.items():
             cleaned_value = self._clean_value(value)
-            if cleaned_value:
+            # prefer existing line-based parsed values; only fill missing
+            if debug_run and cleaned_value:
+                print(f"  order_form provides {key}: {repr(cleaned_value)}")
+            if cleaned_value and not cleaned.get(key):
+                if debug_run:
+                    print(f"  merging {key} into cleaned (was missing)")
                 cleaned[key] = cleaned_value
+
+        if debug_run:
+            if 'customer_name' in cleaned:
+                print(f"\n[DEBUG] customer_name in cleaned BEFORE phone/name split: {repr(cleaned.get('customer_name'))}")
 
         phone_name = self._split_phone_and_name(cleaned.get("phone"))
         if phone_name[0]:
@@ -216,6 +292,10 @@ class PdfParserService:
             cleaned["job_number"] = cleaned.get("order_number") or cleaned.get("order_id")
         if "customer_name" not in cleaned:
             cleaned["customer_name"] = cleaned.get("customer_name")
+
+        if debug_run:
+            print(f"\n[DEBUG FINAL] cleaned customer_name: {repr(cleaned.get('customer_name'))}")
+            print("--- PDF PARSE DEBUG END ---")
 
         required_order_fields = [
             "order_number",
@@ -232,9 +312,33 @@ class PdfParserService:
         if order_form_detected:
             missing_fields = [field for field in required_order_fields if not cleaned.get(field)]
             cleaned["missing_fields"] = missing_fields
-            cleaned["should_create_job"] = len(missing_fields) == 0
+            # treat as createable when core identifiers exist even if some optional
+            # order-form fields (like customer_number) are missing
+            cleaned["should_create_job"] = (len(missing_fields) == 0) or (bool(cleaned.get("job_number") and cleaned.get("customer_name")))
         else:
             cleaned["should_create_job"] = bool(cleaned.get("job_number") and cleaned.get("customer_name"))
+        # extract notes block heuristically
+        notes_match = re.search(r"(instrukc[eí]|poznámk|poznámka|informace pro technika|popis závad|popis zavady)(?:[:\-\s]+)(.+)$", full_text, flags=re.IGNORECASE | re.DOTALL)
+        if notes_match:
+            notes = re.sub(r"\s+", " ", notes_match.group(2)).strip()
+            if notes:
+                cleaned["notes"] = notes
+
+        # split customer_name into first/last when possible
+        if cleaned.get("customer_name") and ("first_name" not in cleaned or "last_name" not in cleaned):
+            parts = cleaned["customer_name"].split()
+            if len(parts) >= 2:
+                cleaned["first_name"] = parts[0]
+                cleaned["last_name"] = " ".join(parts[1:])
+            else:
+                cleaned["first_name"] = cleaned["customer_name"]
+                cleaned["last_name"] = None
+
+        # build combined address
+        if cleaned.get("street") and cleaned.get("city") and not cleaned.get("address"):
+            addr = f"{cleaned.get('street')}, {cleaned.get('city')}"
+            cleaned["address"] = addr
+
         return cleaned
 
     def _parse_order_form_text(self, full_text: str) -> dict[str, str]:
@@ -264,12 +368,23 @@ class PdfParserService:
             "customer_name": self._extract_by_patterns(
                 full_text,
                 [
-                    r"jméno\s*a\s*příjmení\s*[:\-]?\s*(.+?)(?=\s+id\s*objednávky\b|\s+asistovaná\s*instalace\b|\s+ulice\b|\s+kontaktní\s*telefon\b|$)",
-                    r"jmeno\s*a\s*prijmeni\s*[:\-]?\s*(.+?)(?=\s+id\s*objednavky\b|\s+asistovana\s*instalace\b|\s+ulice\b|\s+kontaktni\s*telefon\b|\s+mesto\b|\s+telefon\b|$)",
+                    r"jméno\s*a\s*příjmení\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednávky|id\s*objednavky|číslo\s*objednávky|cislo\s*objednavky|kontaktní\s*telefon|kontaktni\s*telefon|ulice|město|mesto|asistovaná\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    r"jmeno\s*a\s*prijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednavky|id\s*objednávky|cislo\s*objednavky|číslo\s*objednávky|kontaktni\s*telefon|kontaktní\s*telefon|ulice|mesto|město|asistovana\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    # OCR sometimes merges tokens: e.g. 'Jménoapiijmeni: Name Surname'
+                    r"jméno\W*apiijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:id\s*objednavky|id\s*objednávky|číslo\s*objednávky|cislo\s*objednavky|kontaktní\s*telefon|kontaktni\s*telefon|ulice|město|mesto|asistovaná\s*instalace)\b|$)",
+                    r"jmeno\W*apiijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:id\s*objednavky|id\s*objednávky|cislo\s*objednavky|číslo\s*objednávky|kontaktni\s*telefon|kontaktní\s*telefon|ulice|mesto|město|asistovana\s*instalace)\b|$)",
+                    # capture name when followed by ASCII 'ID objednavky' marker
+                    r"jméno\W*apiijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednavky|id\s*objednávky|číslo\s*objednávky|cislo\s*objednavky|kontaktní\s*telefon|kontaktni\s*telefon|ulice|město|mesto|asistovaná\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    r"jmeno\W*apiijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednavky|id\s*objednávky|číslo\s*objednávky|cislo\s*objednavky|kontaktni\s*telefon|kontaktní\s*telefon|ulice|mesto|město|asistovana\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    # common OCR garbles seen in real PDFs
+                    r"jméno\s*a\s*pfijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednavky|id\s*objednávky|číslo\s*objednávky|cislo\s*objednavky|kontaktní\s*telefon|kontaktni\s*telefon|ulice|město|mesto|asistovaná\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    r"jmeno\s*a\s*piijmeni\s*[:\-]?\s*(.+?)(?=\s+(?:objednavky|id\s*objednavky|id\s*objednávky|číslo\s*objednávky|cislo\s*objednavky|kontaktni\s*telefon|kontaktní\s*telefon|ulice|mesto|město|asistovana\s*instalace|\b[iI]\)|\b\d+D)\b|$)",
+                    # handle leading underscore/misc between name and 'objednavky'
+                    r"jméno\s*a\s*piijmeni\s*[:\-]?\s*[_\s]*(.+?)(?=\s+\d*\s*objednavky\b|\s+objednavky\b|$)",
                     r"jméno\s*zákazníka\s*[:\-]?\s*(.+?)(?=\s+id\s*objednávky\b|\s+asistovaná\s*instalace\b|\s+typ\s*objednávky\b|$)",
                     r"jmeno\s*zakaznika\s*[:\-]?\s*(.+?)(?=\s+id\s*objednavky\b|\s+asistovana\s*instalace\b|\s+typ\s*objednavky\b|\s+ulice\b|\s+mesto\b|\s+telefon\b|$)",
-                    r"zákazník\s*[:\-]?\s*(.+?)(?=\s+id\s*objednávky\b|\s+asistovaná\s*instalace\b|$)",
-                    r"zakaznik\s*[:\-]?\s*(.+?)(?=\s+id\s*objednavky\b|\s+asistovana\s*instalace\b|$)",
+                    r"(?:^|\n)zákazník\s*[:\-]?\s*(.+?)(?=\s+id\s*objednávky\b|\s+asistovaná\s*instalace\b|$)",
+                    r"(?:^|\n)zakaznik\s*[:\-]?\s*(.+?)(?=\s+id\s*objednavky\b|\s+asistovana\s*instalace\b|$)",
                 ],
             ),
             "street": self._extract_by_patterns(
@@ -327,7 +442,15 @@ class PdfParserService:
             return True
         ascii_markers = ["cislo objednavky", "datum vytvoreni", "zakaznicke cislo", "id objednavky", "typ objednavky"]
         hits_ascii = sum(1 for marker in ascii_markers if marker in normalized)
-        return hits_ascii >= 2
+        if hits_ascii >= 2:
+            return True
+        # tolerate heavily corrupted OCR: if common order-form anchors appear
+        # e.g. 'jméno' together with 'objedn' or 'zakaz', treat as order form
+        if ("jméno" in normalized or "jmeno" in normalized or "jm" in normalized) and (
+            "objedn" in normalized or "zakaz" in normalized
+        ):
+            return True
+        return False
 
     def _extract_value(self, line: str, index: int, lines: list[str]) -> str:
         if ":" in line:
@@ -362,6 +485,8 @@ class PdfParserService:
                 r"\bps\.?\s*[:\-]",
                 r"\bpsc\s*[:\-]",
                 r"\bzip\s*[:\-]",
+                # common following labels present in Vodafone PDFs (ascii/diacritics)
+                r"vytvo[řr]ení\s*objednávky", r"vytvoreni\s*objednavky", r"cas\s*p[řr]islibu", r"cas\s*prislibu",
             ]
             cut_at = len(value)
             for pattern in next_label_patterns:
