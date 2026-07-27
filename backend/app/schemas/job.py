@@ -9,7 +9,7 @@ class JobBase(BaseModel):
     job_number: str = Field(min_length=1, max_length=50)
     status: str = Field(default="new", max_length=50)
     priority: str = Field(default="medium", max_length=20)
-    customer_name: str = Field(min_length=1, max_length=150)
+    customer_name: str = Field(min_length=1, max_length=1000)
     company: Optional[str] = Field(default=None, max_length=150)
     phone: Optional[str] = Field(default=None, max_length=50)
     email: Optional[str] = Field(default=None, max_length=255)
