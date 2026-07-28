@@ -57,6 +57,22 @@ export default function ImportPdfPage() {
     fetchUploads();
   }, []);
 
+
+  useEffect(() => {
+    const hasPending = uploads.some(
+      (u) =>
+        u.processing_status !== "Hotovo" &&
+        u.processing_status !== "Vyžaduje kontrolu" &&
+        u.processing_status !== "Chyba"
+    );
+
+    if (!hasPending) return;
+
+    const timer = window.setInterval(fetchUploads, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [uploads]);
+
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const selected = event.target.files?.[0] ?? null;
     setFile(selected);

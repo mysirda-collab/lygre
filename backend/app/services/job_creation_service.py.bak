@@ -2,7 +2,6 @@ from datetime import datetime
 import re
 from typing import Any
 import logging
-log = logging.getLogger(__name__)
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -23,9 +22,7 @@ class JobCreationService:
 
     def process_upload(self, upload: Upload, file_path: str) -> tuple[dict[str, Any], Job | None]:
         # extract full text
-        log.warning("1. extract_text_from_pdf START %s", upload.id)
         text = self.parser.extract_text_from_pdf(file_path)
-        log.warning("2. extract_text_from_pdf END %s", upload.id)
         # try to decode QR from the single-page PDF bytes (if available)
         qr_job = None
         try:
@@ -44,10 +41,7 @@ class JobCreationService:
         except Exception:
             qr_job = None
 
-        log.warning("3. process_upload_text START %s", upload.id)
-        result = self.process_upload_text(upload, text, qr_job=qr_job)
-        log.warning("4. process_upload_text END %s", upload.id)
-        return result
+        return self.process_upload_text(upload, text, qr_job=qr_job)
 
     def process_upload_text(self, upload: Upload, text: str, qr_job: str | None = None) -> tuple[dict[str, Any], Job | None]:
         parsed_payload = self.parser.build_parsed_payload(text)

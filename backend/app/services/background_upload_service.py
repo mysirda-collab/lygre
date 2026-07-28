@@ -1,0 +1,31 @@
+import logging
+
+from app.dependencies.database import SessionLocal
+from app.crud.upload import get_upload_by_id
+from app.services.job_creation_service import JobCreationService
+
+log = logging.getLogger(__name__)
+
+
+def process_upload(upload_id: int, file_path: str):
+    log.warning("=== BACKGROUND START upload_id=%s file=%s ===", upload_id, file_path)
+
+    db = SessionLocal()
+    try:
+        upload = get_upload_by_id(db=db, upload_id=upload_id)
+
+        if upload is None:
+            log.error("Upload %s nebyl nalezen.", upload_id)
+            return
+
+        log.warning("Upload nalezen, spouštím JobCreationService")
+
+        JobCreationService(db).process_upload(upload, file_path)
+
+        log.warning("=== BACKGROUND END upload_id=%s ===", upload_id)
+
+    except Exception:
+        log.exception("Chyba při background zpracování uploadu")
+
+    finally:
+        db.close()
