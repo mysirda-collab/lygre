@@ -1,3 +1,8 @@
 __pycache__/
 *.py[cod]
 .env
+# Local development DB (do not commit)
+dev.db
+
+# Temporary integration artifacts
+tmp_integration/
