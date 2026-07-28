@@ -15,7 +15,7 @@ def create_upload(
     content_type: str | None,
     file_size: int,
     status: str = "Hotovo",
-    processing_status: str = "Zpracovává se",
+    processing_status: str = "WAITING",
     source_document_id: str | None = None,
     source_original_filename: str | None = None,
     source_stored_filename: str | None = None,
