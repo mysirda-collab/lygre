@@ -15,7 +15,6 @@ from app.dependencies.database import get_db
 from app.models.user import User, UserRole
 from app.schemas.job import JobCreate, JobRead
 from app.schemas.upload import UploadCreateResponse, UploadRead
-from app.services.job_creation_service import JobCreationService
 
 router = APIRouter()
 
@@ -44,7 +43,7 @@ async def upload_pdf(
     upload_dir = Path(settings.uploads_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    service = JobCreationService(db)
+    # service = JobCreationService(db)
     created_ids: list[int] = []
     source_document_id = uuid4().hex
     source_stored_filename = f"{uuid4().hex}.pdf"
@@ -69,8 +68,8 @@ async def upload_pdf(
             file_path=str(page_path),
             content_type=content_type,
             file_size=page_path.stat().st_size,
-            status="Zpracovává se",
-            processing_status="Zpracovává se",
+            status="Čeká",
+            processing_status="WAITING",
             source_document_id=source_document_id,
             source_original_filename=file.filename,
             source_stored_filename=source_stored_filename,
@@ -80,16 +79,7 @@ async def upload_pdf(
         )
         created_ids.append(upload.id)
 
-        try:
-            service.process_upload(upload, str(page_path))
-        except Exception as exc:
-            update_upload(
-                db,
-                upload,
-                status="Vyžaduje kontrolu",
-                processing_status="Vyžaduje kontrolu",
-                error_message=str(exc)[:1000],
-            )
+        # Processing will be done asynchronously by scheduler.
     else:
         for page_number, page in enumerate(reader.pages, start=1):
             writer = PdfWriter()
@@ -106,8 +96,8 @@ async def upload_pdf(
                 file_path=str(page_path),
                 content_type=content_type,
                 file_size=page_path.stat().st_size,
-                status="Zpracovává se",
-                processing_status="Zpracovává se",
+                status="Čeká",
+                processing_status="WAITING",
                 source_document_id=source_document_id,
                 source_original_filename=file.filename,
                 source_stored_filename=source_stored_filename,
@@ -117,16 +107,7 @@ async def upload_pdf(
             )
             created_ids.append(upload.id)
 
-            try:
-                service.process_upload(upload, str(page_path))
-            except Exception as exc:
-                update_upload(
-                    db,
-                    upload,
-                    status="Vyžaduje kontrolu",
-                    processing_status="Vyžaduje kontrolu",
-                    error_message=str(exc)[:1000],
-                )
+            # Processing will be done asynchronously by scheduler.
 
     return UploadCreateResponse(
         id=created_ids[0],
