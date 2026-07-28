@@ -98,14 +98,14 @@ export default function DashboardPage() {
 
         <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {statuses.map((key) => (
-            <div key={key} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <a key={key} href={`/jobs?status=${key}`} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm block hover:shadow">
               <div className="text-xs uppercase tracking-[0.2em] text-slate-500">{statusTitle[key]}</div>
               {loading ? (
                 <div className="mt-3 h-8 w-16 animate-pulse rounded bg-slate-100" />
               ) : (
                 <div className="mt-3 text-3xl font-bold text-slate-900">{statusCounts[key] || 0}</div>
               )}
-            </div>
+            </a>
           ))}
         </div>
 

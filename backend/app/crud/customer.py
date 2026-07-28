@@ -71,3 +71,22 @@ def find_or_create(db: Session, *, uuid: str | None, customer_number: str | None
 
     cid = _uuid.uuid4().hex if not uuid else uuid
     return create_customer(db, uuid=cid, customer_number=customer_number or f"AUTO-{cid}", name=name or "", phone=phone, email=email, street=street, city=city, zip=zip)
+
+
+def merge_customers(db: Session, primary: Customer, source: Customer) -> Customer:
+    """Merge source into primary: reassign jobs and reservations, then delete source."""
+    # reassign jobs
+    from app.models.job import Job
+    from app.models.reservation import Reservation
+
+    db.query(Job).filter(Job.customer_id == source.id).update({"customer_id": primary.id})
+    # reassign reservations if model exists
+    try:
+        db.query(Reservation).filter(Reservation.customer_id == source.id).update({"customer_id": primary.id})
+    except Exception:
+        pass
+    # delete source customer
+    db.delete(source)
+    db.commit()
+    db.refresh(primary)
+    return primary

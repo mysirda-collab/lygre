@@ -194,6 +194,32 @@ def update_job_endpoint(
     return _job_to_read(updated)
 
 
+@router.patch("/{job_id}", response_model=JobRead, summary="Patch job (partial update)")
+def patch_job_endpoint(
+    job_id: int,
+    payload: dict[str, Any],
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER)),
+) -> JobRead:
+    job = get_job_by_id(db=db, job_id=job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    # Only allow updating known fields
+    allowed = {"job_number", "status", "priority", "customer_name", "company", "phone", "email", "street", "city", "zip", "installation_date", "technician", "notes"}
+    update_data = {k: v for k, v in payload.items() if k in allowed}
+    if not update_data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields to update")
+    # validate job_number uniqueness if changed
+    if "job_number" in update_data and update_data["job_number"] != job.job_number:
+        existing = get_job_by_number(db=db, job_number=update_data["job_number"])
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job number already exists")
+    updated = update_job(db=db, job=job, job_data=update_data)
+    create_audit_log(db=db, entity_type="job", entity_id=updated.id, action="patch", details=f"Patched job {updated.job_number}")
+    logger.info("Patched job %s", updated.job_number)
+    return _job_to_read(updated)
+
+
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete job")
 def delete_job_endpoint(
     job_id: int,

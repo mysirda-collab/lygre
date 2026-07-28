@@ -8,8 +8,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = '015_add_calendar_exclude_constraint'
-down_revision = '014_optimize_reservation_schema_indexes'
+revision = '015_add_cal_excl'
+down_revision = '014_res_schema_idx_opt'
 branch_labels = None
 depends_on = None
 
@@ -22,9 +22,10 @@ def upgrade() -> None:
         return
 
     op.execute('CREATE EXTENSION IF NOT EXISTS btree_gist')
-    # create a range column on the fly using tsrange(starts_at, ends_at)
+    # create a range column on the fly using tstzrange(starts_at, ends_at)
+    # use tstzrange because starts_at/ends_at are timestamptz (timestamp with time zone)
     op.execute(
-        "ALTER TABLE calendar_events ADD CONSTRAINT calendar_events_tech_time_excl EXCLUDE USING GIST (technician_id WITH =, tsrange(starts_at, ends_at) WITH &&)"
+        "ALTER TABLE calendar_events ADD CONSTRAINT calendar_events_tech_time_excl EXCLUDE USING GIST (technician_id WITH =, tstzrange(starts_at, ends_at) WITH &&)"
     )
 
 

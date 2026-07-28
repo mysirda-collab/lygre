@@ -312,9 +312,11 @@ class PdfParserService:
         if order_form_detected:
             missing_fields = [field for field in required_order_fields if not cleaned.get(field)]
             cleaned["missing_fields"] = missing_fields
-            # treat as createable when core identifiers exist even if some optional
-            # order-form fields (like customer_number) are missing
-            cleaned["should_create_job"] = (len(missing_fields) == 0) or (bool(cleaned.get("job_number") and cleaned.get("customer_name")))
+            # For detected order forms require all required order fields to be
+            # present to consider automatic job creation. Do not allow a
+            # shortcut based on only job_number+customer_name since order
+            # forms must be complete for reliable creation.
+            cleaned["should_create_job"] = (len(missing_fields) == 0)
         else:
             cleaned["should_create_job"] = bool(cleaned.get("job_number") and cleaned.get("customer_name"))
         # extract notes block heuristically
@@ -339,10 +341,19 @@ class PdfParserService:
             addr = f"{cleaned.get('street')}, {cleaned.get('city')}"
             cleaned["address"] = addr
 
+        # normalize street value globally to remove OCR noise
+        if cleaned.get("street"):
+            cleaned["street"] = self._normalize_street(cleaned.get("street"))
+        # normalize city to remove trailing tokens like 'Linka 2' or similar noise
+        if cleaned.get("city"):
+            city = cleaned.get("city")
+            city = re.split(r"\bLinka\b|/|:|;|,|\.|\\n", city, flags=re.IGNORECASE)[0].strip()
+            cleaned["city"] = city
+
         return cleaned
 
     def _parse_order_form_text(self, full_text: str) -> dict[str, str]:
-        return {
+        data = {
             "order_number": self._extract_by_patterns(
                 full_text,
                 [
@@ -426,6 +437,24 @@ class PdfParserService:
                 ],
             ),
         }
+        # normalize street when OCR returns packed values like 'Štolcova Patro / Přípojný bodě.: 1/2'
+        if data.get("street"):
+            data["street"] = self._normalize_street(data["street"])
+        return data
+
+    def _normalize_street(self, street: str) -> str:
+        if not street:
+            return street
+        s = street
+        # cut at common noise markers from OCR/PDF merges
+        s = re.split(r"\bPatro\b|/|:|;|,|\.|\(|\\n", s, flags=re.IGNORECASE)[0]
+        s = s.strip()
+        # if contains more than two words, prefer first two (street name + optional number)
+        parts = s.split()
+        if len(parts) > 2:
+            # keep the first token which is typically the street name in these samples
+            return parts[0]
+        return s
 
     def _extract_by_patterns(self, full_text: str, patterns: list[str]) -> str:
         for pattern in patterns:

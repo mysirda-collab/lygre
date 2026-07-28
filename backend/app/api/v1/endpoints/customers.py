@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.schemas.customer import CustomerCreate, CustomerRead, CustomerUpdate
 from app.dependencies.database import get_db
 from app.crud.customer import create_customer, get_customer_by_id, get_customer_by_number, update_customer, search_customers, find_or_create
+from app.crud.customer import merge_customers
+from app.crud.reservation import list_reservations_by_customer
 from app.dependencies.auth import require_roles
 from app.models.user import UserRole
 import uuid as _uuid
@@ -45,3 +47,24 @@ def search_customers_endpoint(q: str | None = None, db: Session = Depends(get_db
         return []
     results = search_customers(db, query=q)
     return results
+
+
+@router.get("/{customer_id}/reservations", response_model=List[dict])
+def list_customer_reservations(customer_id: int, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER))):
+    items = list_reservations_by_customer(db, customer_id)
+    return items
+
+
+@router.post("/{primary_id}/merge", response_model=CustomerRead)
+def merge_customers_endpoint(primary_id: int, payload: dict, db: Session = Depends(get_db), _: None = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER))):
+    source_id = payload.get("source_id")
+    if not source_id:
+        raise HTTPException(status_code=400, detail="source_id required")
+    primary = get_customer_by_id(db, primary_id)
+    if not primary:
+        raise HTTPException(status_code=404, detail="primary not found")
+    source = get_customer_by_id(db, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="source not found")
+    merged = merge_customers(db, primary, source)
+    return merged
