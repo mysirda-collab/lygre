@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 
 import { apiUrl } from '@/lib/api';
@@ -28,6 +28,14 @@ type Job = {
 
 type JobDetailResponse = {
   job: Job;
+  notes: Array<{
+    id: number;
+    text: string;
+    author_name?: string | null;
+    created_at: string;
+    updated_at?: string | null;
+    updated_by_name?: string | null;
+  }>;
   attachments: Array<{
     id: number;
     original_filename: string;
@@ -51,24 +59,77 @@ export default function OrderDetailPage() {
   const [detail, setDetail] = useState<JobDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [newNote, setNewNote] = useState('');
+  const [editingNote, setEditingNote] = useState<{ id: number; text: string } | null>(null);
+  const [noteMessage, setNoteMessage] = useState<string | null>(null);
+  const [savingNote, setSavingNote] = useState(false);
 
-  useEffect(() => {
-    const loadJob = async () => {
-      setLoading(true);
-      setError(null);
+  const loadJob = useCallback(async () => {
+    setLoading(true);
+    setError(null);
 
+    try {
       const response = await authFetch(`/api/v1/jobs/${params.id}/detail`);
       if (!response.ok) {
         setError('Zakazka nebyla nalezena.');
-        setLoading(false);
         return;
       }
       const data = (await response.json()) as JobDetailResponse;
       setDetail(data);
+    } catch {
+      setError('Detail zakazky se nepodarilo nacist.');
+    } finally {
       setLoading(false);
-    };
-    void loadJob();
+    }
   }, [params.id]);
+
+  useEffect(() => {
+    void loadJob();
+  }, [loadJob]);
+
+  const addNote = async () => {
+    const text = newNote.trim();
+    if (!text) return;
+    setSavingNote(true);
+    setNoteMessage(null);
+    try {
+      const response = await authFetch(`/api/v1/jobs/${params.id}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) throw new Error();
+      setNewNote('');
+      setNoteMessage('Poznámka byla přidána.');
+      await loadJob();
+    } catch {
+      setNoteMessage('Poznámku se nepodařilo přidat.');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const updateNote = async () => {
+    const text = editingNote?.text.trim();
+    if (!editingNote || !text) return;
+    setSavingNote(true);
+    setNoteMessage(null);
+    try {
+      const response = await authFetch(`/api/v1/jobs/${params.id}/notes/${editingNote.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) throw new Error();
+      setEditingNote(null);
+      setNoteMessage('Poznámka byla upravena.');
+      await loadJob();
+    } catch {
+      setNoteMessage('Poznámku se nepodařilo upravit.');
+    } finally {
+      setSavingNote(false);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-slate-50 p-8">
@@ -126,10 +187,57 @@ export default function OrderDetailPage() {
                 <p className="mt-1 text-slate-900">{detail.job.technician || '-'}</p>
               </div>
             </div>
-            <div className="mt-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Poznamky</p>
-              <p className="mt-1 text-slate-900">{detail.job.notes || '-'}</p>
-            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-3 text-lg font-semibold">Poznámky</h2>
+            <label htmlFor="new-note" className="text-sm font-medium text-slate-700">Nová poznámka</label>
+            <textarea
+              id="new-note"
+              value={newNote}
+              onChange={(event) => setNewNote(event.target.value)}
+              className="mt-1 min-h-24 w-full rounded-lg border border-slate-300 p-3 text-sm"
+            />
+            <button
+              type="button"
+              onClick={addNote}
+              disabled={savingNote || !newNote.trim()}
+              className="mt-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Přidat poznámku
+            </button>
+            {noteMessage ? <p className="mt-2 text-sm text-slate-700">{noteMessage}</p> : null}
+
+            {detail.notes.length === 0 ? (
+              <div className="mt-4 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">Zakázka zatím nemá žádné poznámky.</div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {detail.notes.map((note) => (
+                  <div key={note.id} className="rounded-lg border border-slate-200 p-3">
+                    {editingNote?.id === note.id ? (
+                      <>
+                        <textarea
+                          value={editingNote.text}
+                          onChange={(event) => setEditingNote({ ...editingNote, text: event.target.value })}
+                          className="min-h-24 w-full rounded-lg border border-slate-300 p-3 text-sm"
+                        />
+                        <div className="mt-2 flex gap-2">
+                          <button type="button" onClick={updateNote} disabled={savingNote || !editingNote.text.trim()} className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-50">Uložit změny</button>
+                          <button type="button" onClick={() => setEditingNote(null)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Zrušit</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="whitespace-pre-wrap text-sm text-slate-900">{note.text}</p>
+                        <p className="mt-2 text-xs text-slate-500">{note.author_name || 'Neznámý uživatel'} · {new Date(note.created_at).toLocaleString('cs-CZ')}</p>
+                        {note.updated_at ? <p className="text-xs text-slate-500">Upravil/a {note.updated_by_name || 'Neznámý uživatel'} · {new Date(note.updated_at).toLocaleString('cs-CZ')}</p> : null}
+                        <button type="button" onClick={() => setEditingNote({ id: note.id, text: note.text })} className="mt-2 text-sm font-medium text-slate-700 underline-offset-2 hover:underline">Upravit</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
