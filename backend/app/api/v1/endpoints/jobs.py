@@ -9,18 +9,22 @@ from sqlalchemy.orm import Session
 from app.crud.audit import create_audit_log
 from app.crud.job import (
     create_job,
+    add_job_note,
     delete_job,
     get_dashboard_summary,
     get_job_by_id,
     get_job_by_number,
     get_job_detail_data,
+    get_job_note,
+    get_job_notes,
     get_jobs,
     update_job,
+    update_job_note,
 )
 from app.dependencies.auth import require_roles
 from app.dependencies.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.job import DashboardSummaryResponse, JobCreate, JobDetailResponse, JobListResponse, JobRead, JobUpdate
+from app.schemas.job import DashboardSummaryResponse, JobCreate, JobDetailResponse, JobListResponse, JobNoteCreate, JobNoteRead, JobNoteUpdate, JobRead, JobStatusUpdate, JobUpdate, JOB_STATUSES
 
 router = APIRouter()
 logger = logging.getLogger("jobs")
@@ -76,6 +80,9 @@ def _job_to_read(job: Any) -> JobRead:
         "notes": job.notes,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
+        "customer_id": job.customer_id,
+        "order_number": job.order_number,
+        "parser_confidence": job.parser_confidence,
     }
     return JobRead.model_validate(data)
 
@@ -88,6 +95,7 @@ def list_jobs(
     priority: str | None = Query(default=None),
     technician: str | None = Query(default=None),
     customer: str | None = Query(default=None),
+    customer_id: int | None = Query(default=None),
     installation_date_from: datetime | None = Query(default=None),
     installation_date_to: datetime | None = Query(default=None),
     installation_date: datetime | None = Query(default=None),
@@ -105,6 +113,7 @@ def list_jobs(
         priority=priority,
         technician=technician,
         customer=customer,
+        customer_id=customer_id,
         installation_date_from=installation_date_from or installation_date,
         installation_date_to=installation_date_to,
         search=search,
@@ -136,7 +145,7 @@ def get_job_detail(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
 ) -> JobDetailResponse:
-    job, attachments, audit_logs = get_job_detail_data(db, job_id)
+    job, attachments, audit_logs, status_history, notes = get_job_detail_data(db, job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     primary_id = None
@@ -144,7 +153,62 @@ def get_job_detail(
         if getattr(a, "is_primary", False):
             primary_id = a.id
             break
-    return JobDetailResponse(job=_job_to_read(job), attachments=attachments, audit_logs=audit_logs, primary_attachment_id=primary_id)
+    customer = None
+    if job.customer:
+        customer = {key: getattr(job.customer, key) for key in ("id", "customer_number", "name", "phone", "email", "street", "city", "zip")}
+    return JobDetailResponse(job=_job_to_read(job), customer=customer, attachments=attachments, audit_logs=audit_logs, status_history=status_history, notes=notes, primary_attachment_id=primary_id)
+
+
+@router.post("/{job_id}/notes", response_model=JobNoteRead, status_code=status.HTTP_201_CREATED, summary="Add timestamped job note")
+def create_job_note_endpoint(
+    job_id: int,
+    payload: JobNoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> JobNoteRead:
+    if not get_job_by_id(db, job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return JobNoteRead.model_validate(add_job_note(db, job_id, payload.text, current_user.id))
+
+
+@router.get("/{job_id}/notes", response_model=list[JobNoteRead], summary="List job notes")
+def list_job_notes_endpoint(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> list[JobNoteRead]:
+    if not get_job_by_id(db, job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return [JobNoteRead.model_validate(note) for note in get_job_notes(db, job_id)]
+
+
+@router.put("/{job_id}/notes/{note_id}", response_model=JobNoteRead, summary="Update job note")
+def update_job_note_endpoint(
+    job_id: int,
+    note_id: int,
+    payload: JobNoteUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> JobNoteRead:
+    if not get_job_by_id(db, job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    note = get_job_note(db, note_id)
+    if not note or note.job_id != job_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job note not found")
+    return JobNoteRead.model_validate(update_job_note(db, note, payload.text, current_user.id))
+
+
+@router.put("/{job_id}/status", response_model=JobRead, summary="Change current job status")
+def change_job_status_endpoint(
+    job_id: int,
+    payload: JobStatusUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> JobRead:
+    job = get_job_by_id(db, job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return _job_to_read(update_job(db, job, {"status": payload.status}))
 
 
 @router.get("/{job_id}", response_model=JobRead, summary="Get job by id")
@@ -209,6 +273,8 @@ def patch_job_endpoint(
     update_data = {k: v for k, v in payload.items() if k in allowed}
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields to update")
+    if "status" in update_data and update_data["status"] not in JOB_STATUSES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid job status")
     # validate job_number uniqueness if changed
     if "job_number" in update_data and update_data["job_number"] != job.job_number:
         existing = get_job_by_number(db=db, job_number=update_data["job_number"])

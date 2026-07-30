@@ -1,164 +1,75 @@
 "use client";
-import { useState, useEffect } from "react";
-import { fetchJob } from "../../../lib/api/jobs";
-import { useRouter, useParams } from "next/navigation";
-import { authFetch } from '@/lib/auth';
 
-type JobType = {
-  id: number;
-  job_number: string;
-  customer_name: string;
-  company?: string;
-  customer_id?: number;
-  phone?: string;
-  notes?: string;
-  status?: string;
-  created_at?: string;
-  email?: string | null;
-  street?: string | null;
-  city?: string | null;
-  zip?: string | null;
-  priority?: string | null;
-  installation_date?: string | null;
-}
+import { useCallback, useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { authFetch } from "@/lib/auth";
 
-export default function JobDetailPage(){
-  const params = useParams() as { id?: string };
-  const id = params.id as string;
-  const [job, setJob] = useState<JobType | null>(null);
-  const [editing, setEditing] = useState<{phone:string, notes:string, email:string, street:string, city:string, zip:string, status:string, priority:string, installation_date:string}>({ phone: '', notes: '', email: '', street: '', city: '', zip: '', status: '', priority: '', installation_date: '' });
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const STATUSES = ["Nová", "Vyžaduje kontrolu", "Klient nekontaktován", "Klient kontaktován", "Čeká na termín", "Termín naplánován", "Probíhá realizace", "Dokončeno", "Zrušeno"];
+
+type Job = { id:number; job_number:string; customer_name:string; customer_id?:number; status:string; priority:string; phone?:string|null; email?:string|null; street?:string|null; city?:string|null; zip?:string|null; order_number?:string|null; parser_confidence:number; created_at:string };
+type Detail = {
+  job: Job;
+  customer?: { id:number; customer_number:string; name:string; phone?:string|null; email?:string|null; street?:string|null; city?:string|null; zip?:string|null } | null;
+  status_history: { id:number; previous_status?:string|null; new_status:string; changed_at:string }[];
+  notes: { id:number; text:string; author_name?:string|null; created_at:string; updated_at?:string|null; updated_by_name?:string|null }[];
+  attachments: { id:number; original_filename:string; source_original_filename?:string|null; uploaded_at:string; status:string; page_number?:number|null; total_pages?:number|null; parsed_data?:Record<string, unknown>|null; error_message?:string|null }[];
+};
+
+export default function JobDetailPage() {
+  const { id } = useParams() as { id:string };
   const router = useRouter();
+  const [detail, setDetail] = useState<Detail|null>(null);
+  const [status, setStatus] = useState("");
+  const [note, setNote] = useState("");
+  const [editingNote, setEditingNote] = useState<{id:number; text:string}|null>(null);
+  const [error, setError] = useState<string|null>(null);
+  const [success, setSuccess] = useState<string|null>(null);
 
-  useEffect(()=>{
-    fetchJob(id).then((data: JobType)=>{ 
-      setJob(data); 
-      setEditing({ 
-        phone: data.phone||'', 
-        notes: data.notes||'',
-        email: data.email||'',
-        street: data.street||'',
-        city: data.city||'',
-        zip: data.zip||'',
-        status: data.status||'',
-        priority: data.priority||'',
-        installation_date: data.installation_date? data.installation_date.slice(0,10) : '',
-      })
-    }).catch(console.error)
-  },[id]);
+  const load = useCallback(async () => {
+    const response = await authFetch(`/api/v1/jobs/${id}/detail`);
+    if (!response.ok) throw new Error("Zakázku se nepodařilo načíst");
+    const data: Detail = await response.json();
+    setDetail(data); setStatus(data.job.status);
+  }, [id]);
+  useEffect(() => { void load().catch(error => setError(String(error))); }, [load]);
 
-  if(!job) return <div className="p-4">Loading...</div>
+  const changeStatus = async () => {
+    const response = await authFetch(`/api/v1/jobs/${id}/status`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({status}) });
+    if (!response.ok) return setError("Stav se nepodařilo uložit");
+    await load();
+  };
+  const addNote = async () => {
+    if (!note.trim()) return;
+    setError(null); setSuccess(null);
+    const response = await authFetch(`/api/v1/jobs/${id}/notes`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text:note}) });
+    if (!response.ok) return setError("Poznámku se nepodařilo uložit");
+    setNote(""); setSuccess("Poznámka byla přidána."); await load();
+  };
+  const updateNote = async () => {
+    if (!editingNote?.text.trim()) return setError("Poznámka nesmí být prázdná");
+    setError(null); setSuccess(null);
+    const response = await authFetch(`/api/v1/jobs/${id}/notes/${editingNote.id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text:editingNote.text}) });
+    if (!response.ok) return setError("Změny poznámky se nepodařilo uložit");
+    setEditingNote(null); setSuccess("Poznámka byla upravena."); await load();
+  };
 
-  const save = async ()=>{
-    try{
-      const payload: Record<string, unknown> = {};
-      if(!job) return;
-      // basic validation
-      if(editing.phone && !/^\+?[0-9 \-]{6,20}$/.test(editing.phone)) { setError('Neplatne cislo telefonu'); return }
-      if(editing.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(editing.email)) { setError('Neplatny email'); return }
-      setError(null);
-      if(editing.phone !== (job.phone||'')) payload.phone = editing.phone;
-      if(editing.notes !== (job.notes||'')) payload.notes = editing.notes;
-      if(editing.email !== (job.email||'')) payload.email = editing.email;
-      if(editing.street !== (job.street||'')) payload.street = editing.street;
-      if(editing.city !== (job.city||'')) payload.city = editing.city;
-      if(editing.zip !== (job.zip||'')) payload.zip = editing.zip;
-      if(editing.status !== (job.status||'')) payload.status = editing.status;
-      if(editing.priority !== (job.priority||'')) payload.priority = editing.priority;
-      if(editing.installation_date !== (job.installation_date? job.installation_date.slice(0,10):'')) payload.installation_date = editing.installation_date || null;
-      if(Object.keys(payload).length===0) return;
-      setSaving(true);
-      // prefer authFetch to include token
-      const res = await authFetch(`/api/v1/jobs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if(!res.ok) throw new Error('Ulozeni selhalo');
-      // refresh
-      const refreshed = await fetchJob(id);
-      setJob(refreshed);
-      setEditing({
-        phone: refreshed.phone||'',
-        notes: refreshed.notes||'',
-        email: refreshed.email||'',
-        street: refreshed.street||'',
-        city: refreshed.city||'',
-        zip: refreshed.zip||'',
-        status: refreshed.status||'',
-        priority: refreshed.priority||'',
-        installation_date: refreshed.installation_date? refreshed.installation_date.slice(0,10) : ''
-      });
-      setToast('Zmeny ulozeny');
-      setTimeout(()=>setToast(null), 3000);
-    }catch(e){ console.error(e) }finally{ setSaving(false) }
-  }
-
-  return (
-    <div className="p-4">
-      {error ? <div className="mb-4 rounded border bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
-      <button className="mb-4 border px-3 py-1" onClick={()=>router.push('/jobs')}>Back</button>
-      <h1 className="text-2xl mb-4">Job {job.job_number}</h1>
-      <div className="mb-4">
-        <h2 className="font-semibold">Customer</h2>
-        {job.customer_id ? (
-          <a href={`/customers/${job.customer_id}`} className="font-medium text-sky-600 hover:underline">{job.customer_name}</a>
-        ) : (
-          <div className="font-medium">{job.customer_name}</div>
-        )}
-        <div className="text-sm text-slate-600">{job.company}</div>
-      </div>
-      <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block">Phone</label>
-          <input className="border p-2 w-full" value={editing.phone} onChange={e=>setEditing({...editing, phone: e.target.value})} />
-        </div>
-        <div>
-          <label className="block">Email</label>
-          <input className="border p-2 w-full" value={editing.email} onChange={e=>setEditing({...editing, email: e.target.value})} />
-        </div>
-        <div>
-          <label className="block">Street</label>
-          <input className="border p-2 w-full" value={editing.street} onChange={e=>setEditing({...editing, street: e.target.value})} />
-        </div>
-        <div>
-          <label className="block">City</label>
-          <input className="border p-2 w-full" value={editing.city} onChange={e=>setEditing({...editing, city: e.target.value})} />
-        </div>
-        <div>
-          <label className="block">Installation date</label>
-          <input type="date" className="border p-2 w-full" value={editing.installation_date} onChange={e=>setEditing({...editing, installation_date: e.target.value})} />
-        </div>
-        <div>
-          <label className="block">Status</label>
-          <select className="border p-2 w-full" value={editing.status} onChange={e=>setEditing({...editing, status: e.target.value})}>
-            <option value="new">New</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="done">Done</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-        </div>
-        <div>
-          <label className="block">Priority</label>
-          <select className="border p-2 w-full" value={editing.priority} onChange={e=>setEditing({...editing, priority: e.target.value})}>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="urgent">Urgent</option>
-          </select>
-        </div>
-      </div>
-      <div className="mb-4">
-        <h2 className="font-semibold">Details</h2>
-        <div>Status: {job.status}</div>
-        <div>Created: {job.created_at ? new Date(job.created_at).toLocaleString() : ''}</div>
-      </div>
-      <div className="mb-4">
-        <label className="block">Notes</label>
-        <textarea className="border p-2 w-full" value={editing.notes} onChange={e=>setEditing({...editing, notes: e.target.value})} />
-      </div>
-      <div>
-        <button className="border px-3 py-1" onClick={save} disabled={saving}>{saving? 'Saving...' : 'Save'}</button>
-      </div>
-      {toast ? <div className="fixed bottom-4 right-4 rounded-lg bg-slate-900 px-4 py-3 text-sm text-white shadow-lg">{toast}</div> : null}
+  if (!detail) return <div className="p-4">{error || "Načítání…"}</div>;
+  const { job, customer } = detail;
+  const parsed = detail.attachments.length ? "Dostupné v detailu importu" : "Bez zdrojového importu";
+  return <div className="space-y-5 p-4">
+    <button className="border px-3 py-1" onClick={() => router.push("/jobs")}>Zpět</button>
+    {error && <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">{error}</div>}
+    {success && <div className="rounded border border-green-200 bg-green-50 p-3 text-green-700">{success}</div>}
+    <header><h1 className="text-2xl font-semibold">Zakázka {job.job_number}</h1><p>Aktuální stav: <strong>{job.status}</strong></p></header>
+    <div className="grid gap-4 md:grid-cols-2">
+      <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Zákazník</h2>
+        {customer ? <><a className="text-blue-600 hover:underline" href={`/customers/${customer.id}`}>{customer.name}</a><p>Číslo: {customer.customer_number}</p><p>{customer.phone} · {customer.email}</p><p>{customer.street}, {customer.zip} {customer.city}</p></> : <p>{job.customer_name}</p>}
+      </section>
+      <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Informace o zakázce</h2><p>Objednávka: {job.order_number || "—"}</p><p>Priorita: {job.priority}</p><p>Adresa: {job.street}, {job.zip} {job.city}</p><p>Vytvořeno: {new Date(job.created_at).toLocaleString()}</p></section>
     </div>
-  )
+    <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Změnit stav</h2><div className="flex gap-2"><select className="border p-2" value={status} onChange={e=>setStatus(e.target.value)}>{!STATUSES.includes(status) && <option value={status}>{status}</option>}{STATUSES.map(item=><option key={item}>{item}</option>)}</select><button className="border px-3" onClick={changeStatus}>Uložit stav</button></div></section>
+    <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Historie stavů</h2>{detail.status_history.length ? <ul className="space-y-1">{detail.status_history.map(item=><li key={item.id}>{new Date(item.changed_at).toLocaleString()}: {item.previous_status || "—"} → <strong>{item.new_status}</strong></li>)}</ul> : <p className="text-slate-500">Bez historie</p>}</section>
+    <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Poznámky</h2><label className="block text-sm font-medium" htmlFor="new-job-note">Nová poznámka</label><div className="mt-1 flex gap-2"><textarea id="new-job-note" className="min-h-20 flex-1 border p-2" value={note} onChange={e=>setNote(e.target.value)}/><button className="border px-3" onClick={addNote} disabled={!note.trim()}>Přidat poznámku</button></div><ul className="mt-3 space-y-3">{detail.notes.map(item=><li key={item.id} className="border-t pt-3">{editingNote?.id === item.id ? <div className="space-y-2"><textarea className="min-h-20 w-full border p-2" value={editingNote.text} onChange={e=>setEditingNote({...editingNote, text:e.target.value})}/><div className="flex gap-2"><button className="border px-3 py-1" onClick={updateNote}>Uložit změny</button><button className="border px-3 py-1" onClick={()=>setEditingNote(null)}>Zrušit</button></div></div> : <><p className="whitespace-pre-wrap">{item.text}</p><p className="mt-1 text-xs text-slate-500">Vytvořil/a {item.author_name || "Neznámý uživatel"} · {new Date(item.created_at).toLocaleString()}</p>{item.updated_at && <p className="text-xs text-slate-500">Naposledy upravil/a {item.updated_by_name || "Neznámý uživatel"} · {new Date(item.updated_at).toLocaleString()}</p>}<button className="mt-2 border px-3 py-1 text-sm" onClick={()=>setEditingNote({id:item.id, text:item.text})}>Upravit</button></>}</li>)}</ul></section>
+    <section className="rounded-xl border bg-white p-4"><h2 className="mb-2 font-semibold">Zdrojový PDF import</h2><p className="text-sm">Parsování: {parsed}; důvěra {Math.round(job.parser_confidence * 100)} %; {job.status === "Vyžaduje kontrolu" ? "vyžaduje kontrolu" : "bez příznaku kontroly"}.</p><ul className="mt-2 space-y-3">{detail.attachments.map(file=><li key={file.id}><a className="text-blue-600" href={`/api/v1/uploads/pdf/${file.id}/download`}>{file.source_original_filename || file.original_filename}</a> · strana {file.page_number || 1}/{file.total_pages || 1} · {file.status}{file.error_message && <p className="text-red-600">{file.error_message}</p>}{file.parsed_data && <pre className="mt-1 overflow-auto rounded bg-slate-50 p-2 text-xs">{JSON.stringify(file.parsed_data, null, 2)}</pre>}</li>)}</ul></section>
+  </div>;
 }

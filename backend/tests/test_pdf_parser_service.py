@@ -54,6 +54,27 @@ class PdfParserServiceTest(unittest.TestCase):
         self.assertEqual(result["email"], "servis@firma.cz")
         self.assertFalse(result["should_create_job"])
 
+    def test_extracts_supported_czech_phone_formats_near_contact_labels(self) -> None:
+        parser = PdfParserService()
+        cases = {
+            "Telefon: +420 777 123 456": "+420 777 123 456",
+            "Tel. +420777123456": "+420 777 123 456",
+            "Mobil: 777 123 456": "777 123 456",
+            "Telefonní číslo: 777123456": "777 123 456",
+        }
+
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(parser.parse_text(text)["phone"], expected)
+
+    def test_combines_street_with_house_number_from_following_ocr_line(self) -> None:
+        parser = PdfParserService()
+
+        for house_number in ("15", "15/2", "15a"):
+            with self.subTest(house_number=house_number):
+                result = parser.parse_text(f"Ulice: Novákova\n{house_number}\nMěsto: Praha")
+                self.assertEqual(result["street"], f"Novákova {house_number}")
+
     def test_extract_text_from_pdf_joins_all_pages(self) -> None:
         parser = PdfParserService()
         fake_page_1 = MagicMock()

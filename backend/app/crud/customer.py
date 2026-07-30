@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
@@ -53,7 +53,16 @@ def find_by_phone(db: Session, phone: str) -> Sequence[Customer]:
 
 def search_customers(db: Session, *, query: str, limit: int = 20) -> Sequence[Customer]:
     q = f"%{query}%"
-    return db.scalars(select(Customer).where((Customer.name.ilike(q)) | (Customer.customer_number.ilike(q))).limit(limit)).all()
+    filters = [Customer.name.ilike(q), Customer.customer_number.ilike(q), Customer.phone.ilike(q)]
+    normalized_phone = "".join(character for character in query if character.isdigit())
+    if len(normalized_phone) == 12 and normalized_phone.startswith("420"):
+        normalized_phone = normalized_phone[3:]
+    if len(normalized_phone) == 9:
+        normalized_phone_column = Customer.phone
+        for separator in (" ", "+", "-", "(", ")", ".", "/"):
+            normalized_phone_column = func.replace(normalized_phone_column, separator, "")
+        filters.append(normalized_phone_column.like(f"%{normalized_phone}"))
+    return db.scalars(select(Customer).where(or_(*filters)).limit(limit)).all()
 
 
 def find_or_create(db: Session, *, uuid: str | None, customer_number: str | None, name: str | None, phone: str | None = None, email: str | None = None, street: str | None = None, city: str | None = None, zip: str | None = None) -> Customer:

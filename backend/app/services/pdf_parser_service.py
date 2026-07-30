@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from pdf2image import convert_from_bytes, convert_from_path
@@ -33,6 +33,11 @@ class OrderSheetCandidate:
 
 
 class PdfParserService:
+    MIN_TEXT_LAYER_CHARACTERS = 80
+
+    def _text_layer_is_sufficient(self, text: str) -> bool:
+        return len(re.sub(r"\s+", "", text or "")) >= self.MIN_TEXT_LAYER_CHARACTERS
+
     def extract_order_sheet_candidates(self, pdf_bytes: bytes) -> list[OrderSheetCandidate]:
         if not pdf_bytes:
             return []
@@ -47,8 +52,10 @@ class PdfParserService:
             page_pdf_bytes = self._build_single_page_pdf_bytes(page)
             page_text = (page.extract_text() or "").strip()
 
-            if not page_text:
-                page_text = self._extract_page_text_with_ocr(pdf_bytes, page_index)
+            if not self._text_layer_is_sufficient(page_text):
+                ocr_text = self._extract_page_text_with_ocr(page_pdf_bytes, page_index)
+                if self._text_layer_is_sufficient(ocr_text) or not page_text:
+                    page_text = ocr_text
 
             # Try to extract QR job number from the single-page PDF bytes.
             # If found and is a 7-digit number, prepend a canonical label so
@@ -78,8 +85,14 @@ class PdfParserService:
 
         return candidates
 
-    def extract_text_from_pdf(self, file_path: str | Path) -> str:
+    def extract_text_from_pdf(
+        self,
+        file_path: str | Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         file_path_str = str(file_path)
+        if progress_callback:
+            progress_callback(10, "Načítám PDF dokument")
         reader = PdfReader(file_path_str)
         pages: list[str] = []
         for page in reader.pages:
@@ -87,9 +100,10 @@ class PdfParserService:
             if text:
                 pages.append(text)
         extracted = "\n".join(pages).strip()
-        if extracted:
+        if self._text_layer_is_sufficient(extracted):
             return extracted
-        return self._extract_text_with_ocr(file_path_str)
+        ocr_text = self._extract_text_with_ocr(file_path_str, progress_callback=progress_callback)
+        return ocr_text or extracted
 
     def _build_single_page_pdf_bytes(self, page: Any) -> bytes:
         writer = PdfWriter()
@@ -161,7 +175,11 @@ class PdfParserService:
                 chunks.append(chunk)
         return chunks or [normalized]
 
-    def _extract_text_with_ocr(self, file_path: str) -> str:
+    def _extract_text_with_ocr(
+        self,
+        file_path: str,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         if convert_from_path is None or pytesseract is None:
             return ""
 
@@ -171,7 +189,11 @@ class PdfParserService:
             return ""
 
         pages: list[str] = []
-        for image in images:
+        total_pages = max(len(images), 1)
+        for index, image in enumerate(images, start=1):
+            if progress_callback:
+                progress = 20 + int(((index - 1) / total_pages) * 30)
+                progress_callback(progress, f"Provádím OCR stránky {index}/{total_pages}")
             try:
                 text = pytesseract.image_to_string(image, lang="ces+eng")
             except Exception:
@@ -179,6 +201,9 @@ class PdfParserService:
             normalized = re.sub(r"\s+", " ", text).strip()
             if normalized:
                 pages.append(text.strip())
+            if progress_callback:
+                progress = 20 + int((index / total_pages) * 30)
+                progress_callback(min(progress, 50), f"OCR stránky {index}/{total_pages} dokončeno")
         return "\n".join(pages).strip()
 
     def _extract_qr_job_number(self, page_pdf_bytes: bytes) -> str | None:
@@ -240,12 +265,21 @@ class PdfParserService:
                         print("  _extract_value returned:", repr(extracted))
                         print("  setting customer_name first time")
                     values["customer_name"] = extracted
-            elif re.search(r"(?:^|\s)(telefon|phone|tel)", lowered):
-                values["phone"] = self._extract_value(line, index, normalized_lines)
+            elif re.search(r"(?:^|\s)(?:telefon(?:ní\s*číslo)?|phone|tel\.?|mobil)(?=\s|:|\-|$)", lowered):
+                if ":" in line:
+                    values["phone"] = self._extract_value(line, index, normalized_lines)
+                else:
+                    labeled_phone = self._extract_labeled_phone(line)
+                    values["phone"] = labeled_phone or self._extract_value(line, index, normalized_lines)
             elif re.search(r"(?:^|\s)(e-mail|email|mail)", lowered):
                 values["email"] = self._extract_value(line, index, normalized_lines)
             elif re.search(r"(?:^|\s)(ulice|street|adresa)", lowered):
-                values["street"] = self._extract_value(line, index, normalized_lines)
+                street = self._extract_value(line, index, normalized_lines)
+                if index + 1 < len(normalized_lines):
+                    next_line = normalized_lines[index + 1]
+                    if re.fullmatch(r"\d+(?:/\d+)?[A-Za-z]?", next_line):
+                        street = f"{street} {next_line}".strip()
+                values["street"] = street
             elif re.search(r"(?:^|\s)(město|m.sto|city|obec)", lowered):
                 values["city"] = self._extract_value(line, index, normalized_lines)
             elif re.search(r"(?:^|\s)(psč|ps.|psc|zip|postal)", lowered):
@@ -256,9 +290,9 @@ class PdfParserService:
             if email_match:
                 values["email"] = email_match.group(0)
         if "phone" not in values:
-            phone_match = re.search(r"(?:\+\d{1,3}\s?)?(?:\d[\s-]?){7,}", full_text)
-            if phone_match:
-                values["phone"] = phone_match.group(0)
+            phone = self._extract_czech_phone(full_text)
+            if phone:
+                values["phone"] = phone
         if "zip" not in values:
             zip_match = re.search(r"\b\d{3}\s?\d{2}\b", full_text)
             if zip_match:
@@ -446,15 +480,36 @@ class PdfParserService:
         if not street:
             return street
         s = street
-        # cut at common noise markers from OCR/PDF merges
-        s = re.split(r"\bPatro\b|/|:|;|,|\.|\(|\\n", s, flags=re.IGNORECASE)[0]
+        # Cut at known following labels while preserving house-number slashes and suffixes.
+        s = re.split(r"\b(?:Patro|Město|Mesto|Linka)\b|;|,|\\n", s, flags=re.IGNORECASE)[0]
         s = s.strip()
-        # if contains more than two words, prefer first two (street name + optional number)
-        parts = s.split()
-        if len(parts) > 2:
-            # keep the first token which is typically the street name in these samples
-            return parts[0]
+        house_number = re.search(r"(?:^|\s)\d+(?:/\d+)?[A-Za-z]?(?=\s|$)", s)
+        if house_number:
+            return s[:house_number.end()].strip()
         return s
+
+    def _extract_czech_phone(self, text: str) -> str | None:
+        match = re.search(
+            r"(?<!\d)(?P<phone>(?:\+?420[\s().-]*)?(?:\d[\s().-]*){9})(?!\d)",
+            text,
+        )
+        if not match:
+            return None
+        digits = re.sub(r"\D", "", match.group("phone"))
+        has_prefix = len(digits) == 12 and digits.startswith("420")
+        local_number = digits[-9:]
+        grouped = " ".join(local_number[index:index + 3] for index in range(0, 9, 3))
+        return f"+420 {grouped}" if has_prefix else grouped
+
+    def _extract_labeled_phone(self, text: str) -> str | None:
+        label = re.search(
+            r"(?:telefonní\s*číslo|telefon|tel\.?|mobil)\s*[:\-]?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not label:
+            return None
+        return self._extract_czech_phone(text[label.end():])
 
     def _extract_by_patterns(self, full_text: str, patterns: list[str]) -> str:
         for pattern in patterns:
@@ -542,15 +597,16 @@ class PdfParserService:
 
         parts = [part.strip() for part in re.split(r"[;,]\s*", raw) if part.strip()]
         for part in parts:
-            if re.fullmatch(r"(?:\+?\d[\d\s()\-]{6,}\d)", part):
+            phone = self._extract_czech_phone(part)
+            if phone:
                 name = next((candidate for candidate in parts if candidate != part and re.search(r"[A-Za-zÁ-ž]", candidate)), None)
-                return re.sub(r"\s+", " ", part).strip(), name
+                return phone, name
 
-        match = re.search(r"(?:\+?\d[\d\s()\-]{6,}\d)", raw)
-        if not match:
+        phone = self._extract_czech_phone(raw)
+        if not phone:
             return raw, None
-        phone = re.sub(r"\s+", " ", match.group(0)).strip(" ;,")
-        tail = raw[match.end():].strip(" ;,")
+        phone_match = re.search(r"(?<!\d)(?:\+?420[\s().-]*)?(?:\d[\s().-]*){9}(?!\d)", raw)
+        tail = raw[phone_match.end():].strip(" ;,") if phone_match else ""
         name = tail if tail and re.search(r"[A-Za-zÁ-ž]", tail) else None
         return phone or None, name
 

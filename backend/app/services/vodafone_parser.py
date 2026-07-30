@@ -87,24 +87,45 @@ class VodafoneParser:
         return None
 
     def extract_phone(self, text: str) -> str | None:
-        # Only accept explicit Vodafone label 'Kontaktni telefon:' or 'kontaktní telefon:'
-        m = re.search(r"kontaktni\s*telefon\s*[:\-]\s*([+0-9\s/().-]{6,})", text, flags=re.IGNORECASE)
-        if m:
-            return re.sub(r"\s+", " ", m.group(1)).strip()
+        label = re.search(
+            r"(?:kontaktni\s*telefon|telefonní\s*číslo|telefon|tel\.?|mobil)\s*[:\-]?",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not label:
+            return None
+
+        phone_match = re.search(
+            r"(?<!\d)(?P<phone>(?:\+?420[\s/().-]*)?(?:\d[\s/().-]*){9})(?!\d)",
+            text[label.end():label.end() + 80],
+        )
+        if phone_match:
+            raw_phone = phone_match.group("phone").strip()
+            digits = re.sub(r"\D", "", raw_phone)
+            has_czech_prefix = len(digits) == 12 and digits.startswith("420")
+            local_number = digits[-9:]
+            grouped = " ".join(local_number[index:index + 3] for index in range(0, 9, 3))
+            return f"+420 {grouped}" if has_czech_prefix else grouped
         return None
 
     def extract_address(self, text: str) -> str | None:
-        # Deterministic extraction: look for the exact label 'Ulice (nazev obce):'
-        # and capture text up to the token 'Patro'
-        m = re.search(r"ulice\s*\(nazev\s*obce\)\s*[:\-]\s*(.+?)\bpatro\b", text, flags=re.IGNORECASE | re.DOTALL)
+        m = re.search(
+            r"ulice\s*\(nazev\s*obce\)\s*[:\-]\s*(.+?)(?=\b(?:patro|město|mesto|kontaktni\s*telefon)\b|$)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
         if m:
             street_part = m.group(1).strip()
-            # street_part may contain 'Patro' variants; strip trailing non-address tokens
+            house_number = re.search(
+                r"\b(?:č(?:íslo)?\.?\s*(?:popisné|pop\.?|p\.?)|c(?:islo)?\.?\s*(?:popisne|pop\.?|p\.?))\s*[:\-]?\s*(\d+(?:/\d+)?[A-Za-z]?)",
+                street_part,
+                flags=re.IGNORECASE,
+            )
+            if house_number:
+                street_name = street_part[:house_number.start()].strip(" ,;:-")
+                street_part = f"{street_name} {house_number.group(1)}".strip()
             street_part = re.sub(r"\s+", " ", street_part)
-            # remove trailing pipes or noise
             street_part = re.sub(r"\|$", "", street_part).strip()
-            # try to extract city from nearby text (same line or next words after patro)
-            # look for 'Město' label after the matched segment
             after = text[m.end():m.end()+200]
             city_m = re.search(r"(?:M[eě]sto|M\W*sto|mesto)\s*[:\-]\s*([^\n\r]+)", after, flags=re.IGNORECASE)
             if city_m:

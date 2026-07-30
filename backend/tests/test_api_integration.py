@@ -17,7 +17,7 @@ from app.crud.user import create_user
 from app.models.base import Base
 from app.models.audit_log import AuditLog
 from app.models.calendar_event import CalendarEvent
-from app.models.job import Job
+from app.models.job import Job, JobNote, JobStatusHistory
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models import audit_log as _audit_log  # noqa: F401
@@ -71,6 +71,8 @@ class ApiIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         with self.SessionLocal() as db:
             db.query(Upload).delete()
+            db.query(JobNote).delete()
+            db.query(JobStatusHistory).delete()
             db.query(SmsLog).delete()
             db.query(Reservation).delete()
             db.query(TimeSlot).delete()
@@ -171,6 +173,75 @@ class ApiIntegrationTest(unittest.TestCase):
         payload["email"] = "not-an-email"
         response = self.client.post("/api/v1/jobs", json=payload, headers=headers)
         self.assertEqual(response.status_code, 422)
+
+    def test_job_notes_record_authenticated_author_and_editor(self) -> None:
+        headers, _ = self._login_admin()
+        created_job = self.client.post("/api/v1/jobs", json=self._create_job_payload("NOTE-1001"), headers=headers).json()
+
+        create_response = self.client.post(
+            f"/api/v1/jobs/{created_job['id']}/notes",
+            json={"text": "První poznámka"},
+            headers=headers,
+        )
+        self.assertEqual(create_response.status_code, 201)
+        created_note = create_response.json()
+        self.assertEqual(created_note["author_name"], "Default Admin")
+        self.assertIsNotNone(created_note["author_user_id"])
+        self.assertIsNotNone(created_note["created_at"])
+        self.assertIsNone(created_note["updated_at"])
+
+        original_author_id = created_note["author_user_id"]
+        original_created_at = created_note["created_at"]
+        worker_id = self._create_worker()
+        login = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": "technik@lygre.local", "password": "Worker123!"},
+        )
+        worker_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        update_response = self.client.put(
+            f"/api/v1/jobs/{created_job['id']}/notes/{created_note['id']}",
+            json={"text": "Upravená poznámka"},
+            headers=worker_headers,
+        )
+        self.assertEqual(update_response.status_code, 200)
+        updated_note = update_response.json()
+        self.assertEqual(updated_note["author_user_id"], original_author_id)
+        self.assertEqual(updated_note["created_at"], original_created_at)
+        self.assertEqual(updated_note["updated_by_user_id"], worker_id)
+        self.assertEqual(updated_note["updated_by_name"], "Pavel Technik")
+        self.assertIsNotNone(updated_note["updated_at"])
+
+        notes_response = self.client.get(f"/api/v1/jobs/{created_job['id']}/notes", headers=headers)
+        self.assertEqual(notes_response.status_code, 200)
+        self.assertEqual(notes_response.json()[0]["text"], "Upravená poznámka")
+
+        detail = self.client.get(f"/api/v1/jobs/{created_job['id']}/detail", headers=headers).json()
+        history_messages = [item["details"] for item in detail["audit_logs"]]
+        self.assertIn("Přidána poznámka.", history_messages)
+        self.assertIn("Upravena poznámka.", history_messages)
+
+    def test_job_notes_reject_empty_text_and_cross_job_edit(self) -> None:
+        headers, _ = self._login_admin()
+        first_job = self.client.post("/api/v1/jobs", json=self._create_job_payload("NOTE-2001"), headers=headers).json()
+        second_job = self.client.post("/api/v1/jobs", json=self._create_job_payload("NOTE-2002"), headers=headers).json()
+        empty_response = self.client.post(
+            f"/api/v1/jobs/{first_job['id']}/notes",
+            json={"text": "   "},
+            headers=headers,
+        )
+        self.assertEqual(empty_response.status_code, 422)
+
+        note = self.client.post(
+            f"/api/v1/jobs/{first_job['id']}/notes",
+            json={"text": "Patří první zakázce"},
+            headers=headers,
+        ).json()
+        cross_edit = self.client.put(
+            f"/api/v1/jobs/{second_job['id']}/notes/{note['id']}",
+            json={"text": "Nepovolená změna"},
+            headers=headers,
+        )
+        self.assertEqual(cross_edit.status_code, 404)
 
     def test_auth_refresh_logout_flow(self) -> None:
         headers, refresh_token = self._login_admin()
