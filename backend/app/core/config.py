@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     # toggle production-level fail-fast checks (set LYGRE_PRODUCTION=1 in env)
     is_production: bool = False
+    ai_extraction_enabled: bool = False
+    ai_extraction_endpoint: str | None = None
+    ai_extraction_api_key: str | None = None
+    ai_extraction_timeout_seconds: float = 10.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 

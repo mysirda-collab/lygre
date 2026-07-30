@@ -2,9 +2,10 @@
 
 ## High Priority
 
-- Implement PDF upload progress
-- Implement OCR progress
-- Improve upload processing
+- [x] Implement PDF upload progress
+- [x] Implement OCR progress
+- [x] First production PDF-to-customer-to-job workflow
+- Improve parser confidence calibration and review tooling
 
 ## Medium Priority
 
