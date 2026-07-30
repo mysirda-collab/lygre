@@ -57,20 +57,12 @@ def get_upload_by_id(db: Session, upload_id: int) -> Upload | None:
 
 
 def get_first_waiting_upload(db: Session) -> Upload | None:
-<<<<<<< HEAD
     return db.scalar(
-=======
-    return db.scalars(
->>>>>>> origin/codex/read-and-analyze-project-documentation
         select(Upload)
         .where(Upload.processing_status == "WAITING")
         .order_by(Upload.uploaded_at.asc(), Upload.id.asc())
         .limit(1)
-<<<<<<< HEAD
     )
-=======
-    ).first()
->>>>>>> origin/codex/read-and-analyze-project-documentation
 
 
 def update_upload(db: Session, upload: Upload, **kwargs: object) -> Upload:
