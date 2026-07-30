@@ -168,7 +168,20 @@ class JobStatusHistoryRead(BaseModel):
 
 
 class JobNoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("Note must not be empty")
+        return text
+
+
+class JobNoteUpdate(JobNoteCreate):
+    pass
 
 
 class JobStatusUpdate(BaseModel):
@@ -186,7 +199,12 @@ class JobNoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     text: str
+    author_user_id: int | None
+    author_name: str | None
     created_at: datetime
+    updated_at: datetime | None
+    updated_by_user_id: int | None
+    updated_by_name: str | None
 
 
 class JobDetailResponse(BaseModel):

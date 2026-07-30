@@ -15,13 +15,16 @@ from app.crud.job import (
     get_job_by_id,
     get_job_by_number,
     get_job_detail_data,
+    get_job_note,
+    get_job_notes,
     get_jobs,
     update_job,
+    update_job_note,
 )
 from app.dependencies.auth import require_roles
 from app.dependencies.database import get_db
 from app.models.user import User, UserRole
-from app.schemas.job import DashboardSummaryResponse, JobCreate, JobDetailResponse, JobListResponse, JobNoteCreate, JobNoteRead, JobRead, JobStatusUpdate, JobUpdate, JOB_STATUSES
+from app.schemas.job import DashboardSummaryResponse, JobCreate, JobDetailResponse, JobListResponse, JobNoteCreate, JobNoteRead, JobNoteUpdate, JobRead, JobStatusUpdate, JobUpdate, JOB_STATUSES
 
 router = APIRouter()
 logger = logging.getLogger("jobs")
@@ -161,11 +164,38 @@ def create_job_note_endpoint(
     job_id: int,
     payload: JobNoteCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
 ) -> JobNoteRead:
     if not get_job_by_id(db, job_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    return JobNoteRead.model_validate(add_job_note(db, job_id, payload.text))
+    return JobNoteRead.model_validate(add_job_note(db, job_id, payload.text, current_user.id))
+
+
+@router.get("/{job_id}/notes", response_model=list[JobNoteRead], summary="List job notes")
+def list_job_notes_endpoint(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> list[JobNoteRead]:
+    if not get_job_by_id(db, job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return [JobNoteRead.model_validate(note) for note in get_job_notes(db, job_id)]
+
+
+@router.put("/{job_id}/notes/{note_id}", response_model=JobNoteRead, summary="Update job note")
+def update_job_note_endpoint(
+    job_id: int,
+    note_id: int,
+    payload: JobNoteUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.WORKER)),
+) -> JobNoteRead:
+    if not get_job_by_id(db, job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    note = get_job_note(db, note_id)
+    if not note or note.job_id != job_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job note not found")
+    return JobNoteRead.model_validate(update_job_note(db, note, payload.text, current_user.id))
 
 
 @router.put("/{job_id}/status", response_model=JobRead, summary="Change current job status")

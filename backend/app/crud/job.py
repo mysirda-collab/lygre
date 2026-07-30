@@ -53,17 +53,25 @@ def _apply_filters(
         filters.append(Job.installation_date <= installation_date_to)
     if search:
         search_term = f"%{search.lower()}%"
-        filters.append(
-            or_(
-                Job.job_number.ilike(search_term),
-                Job.customer_name.ilike(search_term),
-                Job.street.ilike(search_term),
-                Job.city.ilike(search_term),
-                Job.company.ilike(search_term),
-                Job.notes.ilike(search_term),
-                Job.technician.ilike(search_term),
-            )
-        )
+        search_filters = [
+            Job.job_number.ilike(search_term),
+            Job.customer_name.ilike(search_term),
+            Job.street.ilike(search_term),
+            Job.city.ilike(search_term),
+            Job.company.ilike(search_term),
+            Job.notes.ilike(search_term),
+            Job.technician.ilike(search_term),
+            Job.phone.ilike(search_term),
+        ]
+        normalized_phone = "".join(character for character in search if character.isdigit())
+        if len(normalized_phone) == 12 and normalized_phone.startswith("420"):
+            normalized_phone = normalized_phone[3:]
+        if len(normalized_phone) == 9:
+            normalized_phone_column = Job.phone
+            for separator in (" ", "+", "-", "(", ")"):
+                normalized_phone_column = func.replace(normalized_phone_column, separator, "")
+            search_filters.append(normalized_phone_column.like(f"%{normalized_phone}"))
+        filters.append(or_(*search_filters))
 
     return query.where(and_(*filters))
 
@@ -149,9 +157,35 @@ def update_job(db: Session, job: Job, job_data: dict[str, Any]) -> Job:
     return job
 
 
-def add_job_note(db: Session, job_id: int, text: str) -> JobNote:
-    note = JobNote(job_id=job_id, text=text.strip())
+def get_job_notes(db: Session, job_id: int) -> list[JobNote]:
+    return list(
+        db.scalars(
+            select(JobNote)
+            .where(JobNote.job_id == job_id)
+            .order_by(JobNote.created_at.desc(), JobNote.id.desc())
+        ).all()
+    )
+
+
+def get_job_note(db: Session, note_id: int) -> JobNote | None:
+    return db.get(JobNote, note_id)
+
+
+def add_job_note(db: Session, job_id: int, text: str, author_user_id: int) -> JobNote:
+    note = JobNote(job_id=job_id, text=text.strip(), author_user_id=author_user_id)
     db.add(note)
+    db.add(AuditLog(entity_type="job", entity_id=job_id, action="note_added", details="Přidána poznámka."))
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+def update_job_note(db: Session, note: JobNote, text: str, updated_by_user_id: int) -> JobNote:
+    note.text = text.strip()
+    note.updated_at = utc_now()
+    note.updated_by_user_id = updated_by_user_id
+    db.add(note)
+    db.add(AuditLog(entity_type="job", entity_id=note.job_id, action="note_updated", details="Upravena poznámka."))
     db.commit()
     db.refresh(note)
     return note
@@ -278,5 +312,5 @@ def get_job_detail_data(db: Session, job_id: int) -> tuple[Job | None, list[Uplo
         .order_by(AuditLog.created_at.desc())
     ).all()
     history = db.scalars(select(JobStatusHistory).where(JobStatusHistory.job_id == job_id).order_by(JobStatusHistory.changed_at.desc())).all()
-    notes = db.scalars(select(JobNote).where(JobNote.job_id == job_id).order_by(JobNote.created_at.desc())).all()
+    notes = get_job_notes(db, job_id)
     return job, list(attachments), list(audit_logs), list(history), list(notes)

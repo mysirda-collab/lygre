@@ -71,7 +71,7 @@ def test_customer_matching_order_status_history_and_notes() -> None:
 
         from app.crud.job import add_job_note, update_job
         update_job(db, job, {"status": "Klient kontaktován"})
-        note = add_job_note(db, job.id, "Domluven telefonát")
+        note = add_job_note(db, job.id, "Domluven telefonát", 1)
         history = db.scalars(select(JobStatusHistory).where(JobStatusHistory.job_id == job.id)).all()
         assert [(item.previous_status, item.new_status) for item in history] == [(None, "Nová"), ("Nová", "Klient kontaktován")]
         assert db.get(JobNote, note.id).text == "Domluven telefonát"

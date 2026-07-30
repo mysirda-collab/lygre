@@ -61,5 +61,18 @@ class JobNote(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    author_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     job = relationship("Job", back_populates="note_entries")
+    author = relationship("User", foreign_keys=[author_user_id])
+    updated_by_user = relationship("User", foreign_keys=[updated_by_user_id])
+
+    @property
+    def author_name(self) -> str | None:
+        return self.author.full_name if self.author else None
+
+    @property
+    def updated_by_name(self) -> str | None:
+        return self.updated_by_user.full_name if self.updated_by_user else None
