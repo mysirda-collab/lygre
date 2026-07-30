@@ -4,6 +4,7 @@ Revision ID: 016_job_history_notes
 Revises: 015_add_cal_excl
 """
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 
 revision = "016_job_history_notes"
@@ -13,14 +14,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "uploads",
-        sa.Column("processing_progress", sa.Integer(), nullable=False, server_default="0"),
-    )
-    op.add_column(
-        "uploads",
-        sa.Column("processing_message", sa.String(length=100), nullable=True),
-    )
+    bind = op.get_bind()
+    upload_columns = {c["name"] for c in inspect(bind).get_columns("uploads")}
+
+    if "processing_progress" not in upload_columns:
+        op.add_column(
+            "uploads",
+            sa.Column("processing_progress", sa.Integer(), nullable=False, server_default="0"),
+        )
+
+    if "processing_message" not in upload_columns:
+        op.add_column(
+            "uploads",
+            sa.Column("processing_message", sa.String(length=100), nullable=True),
+        )
     op.create_table(
         "job_status_history",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -49,5 +56,11 @@ def downgrade() -> None:
     op.drop_table("job_notes")
     op.drop_index("ix_job_status_history_job_id", table_name="job_status_history")
     op.drop_table("job_status_history")
-    op.drop_column("uploads", "processing_message")
-    op.drop_column("uploads", "processing_progress")
+    bind = op.get_bind()
+    upload_columns = {c["name"] for c in inspect(bind).get_columns("uploads")}
+
+    if "processing_message" in upload_columns:
+        op.drop_column("uploads", "processing_message")
+
+    if "processing_progress" in upload_columns:
+        op.drop_column("uploads", "processing_progress")
