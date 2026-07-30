@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from pdf2image import convert_from_bytes, convert_from_path
@@ -33,6 +33,11 @@ class OrderSheetCandidate:
 
 
 class PdfParserService:
+    MIN_TEXT_LAYER_CHARACTERS = 80
+
+    def _text_layer_is_sufficient(self, text: str) -> bool:
+        return len(re.sub(r"\s+", "", text or "")) >= self.MIN_TEXT_LAYER_CHARACTERS
+
     def extract_order_sheet_candidates(self, pdf_bytes: bytes) -> list[OrderSheetCandidate]:
         if not pdf_bytes:
             return []
@@ -47,8 +52,10 @@ class PdfParserService:
             page_pdf_bytes = self._build_single_page_pdf_bytes(page)
             page_text = (page.extract_text() or "").strip()
 
-            if not page_text:
-                page_text = self._extract_page_text_with_ocr(pdf_bytes, page_index)
+            if not self._text_layer_is_sufficient(page_text):
+                ocr_text = self._extract_page_text_with_ocr(page_pdf_bytes, page_index)
+                if self._text_layer_is_sufficient(ocr_text) or not page_text:
+                    page_text = ocr_text
 
             # Try to extract QR job number from the single-page PDF bytes.
             # If found and is a 7-digit number, prepend a canonical label so
@@ -78,8 +85,14 @@ class PdfParserService:
 
         return candidates
 
-    def extract_text_from_pdf(self, file_path: str | Path) -> str:
+    def extract_text_from_pdf(
+        self,
+        file_path: str | Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         file_path_str = str(file_path)
+        if progress_callback:
+            progress_callback(10, "Načítám PDF dokument")
         reader = PdfReader(file_path_str)
         pages: list[str] = []
         for page in reader.pages:
@@ -87,9 +100,10 @@ class PdfParserService:
             if text:
                 pages.append(text)
         extracted = "\n".join(pages).strip()
-        if extracted:
+        if self._text_layer_is_sufficient(extracted):
             return extracted
-        return self._extract_text_with_ocr(file_path_str)
+        ocr_text = self._extract_text_with_ocr(file_path_str, progress_callback=progress_callback)
+        return ocr_text or extracted
 
     def _build_single_page_pdf_bytes(self, page: Any) -> bytes:
         writer = PdfWriter()
@@ -161,7 +175,11 @@ class PdfParserService:
                 chunks.append(chunk)
         return chunks or [normalized]
 
-    def _extract_text_with_ocr(self, file_path: str) -> str:
+    def _extract_text_with_ocr(
+        self,
+        file_path: str,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> str:
         if convert_from_path is None or pytesseract is None:
             return ""
 
@@ -171,7 +189,11 @@ class PdfParserService:
             return ""
 
         pages: list[str] = []
-        for image in images:
+        total_pages = max(len(images), 1)
+        for index, image in enumerate(images, start=1):
+            if progress_callback:
+                progress = 20 + int(((index - 1) / total_pages) * 30)
+                progress_callback(progress, f"Provádím OCR stránky {index}/{total_pages}")
             try:
                 text = pytesseract.image_to_string(image, lang="ces+eng")
             except Exception:
@@ -179,6 +201,9 @@ class PdfParserService:
             normalized = re.sub(r"\s+", " ", text).strip()
             if normalized:
                 pages.append(text.strip())
+            if progress_callback:
+                progress = 20 + int((index / total_pages) * 30)
+                progress_callback(min(progress, 50), f"OCR stránky {index}/{total_pages} dokončeno")
         return "\n".join(pages).strip()
 
     def _extract_qr_job_number(self, page_pdf_bytes: bytes) -> str | None:

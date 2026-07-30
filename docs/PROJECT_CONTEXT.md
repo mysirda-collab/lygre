@@ -74,17 +74,18 @@ PostgreSQL
 3. PDF text is extracted.
 4. OCR is used if needed.
 5. QR codes are detected.
-6. AI parser extracts structured data.
+6. Deterministic parser extracts structured data; optional provider-neutral AI can only fill missing values.
 7. Existing customer is searched.
 8. Customer is created if necessary.
 9. Job is created.
-10. Upload is marked as completed.
+10. Incomplete data creates a linked job with status `Vyžaduje kontrolu`; reliable data creates `Nová`.
+11. Upload is marked as completed and remains linked to the job.
 
 ---
 
 # Current Development
 
-The current task is to implement upload progress reporting.
+The first production PDF-to-customer-to-job workflow is implemented, including duplicate prevention, review jobs, status history and timestamped notes.
 
 Database fields:
 

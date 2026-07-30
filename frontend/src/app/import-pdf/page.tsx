@@ -17,6 +17,8 @@ interface UploadItem {
   parsed_data?: Record<string, string | boolean> | string | null;
   job_id?: number | null;
   processing_status?: string | null;
+  processing_progress?: number | null;
+  processing_message?: string | null;
   source_document_id?: string | null;
   source_original_filename?: string | null;
   page_number?: number | null;
@@ -40,7 +42,6 @@ const statusStyles: Record<string, string> = {
 export default function ImportPdfPage() {
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [progress, setProgress] = useState(0);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -89,12 +90,7 @@ export default function ImportPdfPage() {
     if (!file) return;
 
     setLoading(true);
-    setProgress(0);
     setMessage(null);
-
-    const interval = window.setInterval(() => {
-      setProgress((value) => (value >= 90 ? 90 : value + 10));
-    }, 200);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -104,8 +100,6 @@ export default function ImportPdfPage() {
       body: formData,
     });
 
-    window.clearInterval(interval);
-    setProgress(100);
     setLoading(false);
 
     if (!response.ok) {
@@ -125,11 +119,22 @@ export default function ImportPdfPage() {
   const totalSize = useMemo(() => uploads.reduce((sum, item) => sum + item.file_size, 0), [uploads]);
 
   const sourceSummaries = useMemo(() => {
-    const map = new Map<string, { sourceName: string; totalPages: number; uploadCount: number; createdJobs: number }>();
+    const map = new Map<
+      string,
+      {
+        sourceName: string;
+        totalPages: number;
+        uploadCount: number;
+        createdJobs: number;
+        progressTotal: number;
+        activeMessage: string | null;
+      }
+    >();
     for (const upload of uploads) {
       const key = upload.source_document_id || `single-${upload.id}`;
       const sourceName = upload.source_original_filename || upload.original_filename;
       const totalPages = upload.total_pages || 1;
+      const progress = upload.processing_progress ?? 0;
       const existing = map.get(key);
       if (!existing) {
         map.set(key, {
@@ -137,13 +142,22 @@ export default function ImportPdfPage() {
           totalPages,
           uploadCount: 1,
           createdJobs: upload.job_id ? 1 : 0,
+          progressTotal: progress,
+          activeMessage: upload.processing_message || null,
         });
       } else {
         existing.uploadCount += 1;
         existing.createdJobs += upload.job_id ? 1 : 0;
+        existing.progressTotal += progress;
+        if (upload.processing_message && progress < 100) {
+          existing.activeMessage = upload.processing_message;
+        }
       }
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).map((summary) => ({
+      ...summary,
+      progress: Math.round(summary.progressTotal / Math.max(summary.uploadCount, 1)),
+    }));
   }, [uploads]);
 
   const parseParsedData = (upload: UploadItem) => {
@@ -186,11 +200,11 @@ export default function ImportPdfPage() {
           {loading ? (
             <div className="mt-6">
               <div className="mb-2 flex items-center justify-between text-sm text-slate-600">
-                <span>Probíhá nahrání</span>
-                <span>{progress}%</span>
+                <span>Odesílám PDF na server…</span>
+                <span>0%</span>
               </div>
               <div className="h-2 rounded-full bg-slate-200">
-                <div className="h-2 rounded-full bg-slate-900 transition-all" style={{ width: `${progress}%` }} />
+                <div className="h-2 rounded-full bg-slate-900 transition-all" style={{ width: '0%' }} />
               </div>
             </div>
           ) : null}
@@ -216,6 +230,15 @@ export default function ImportPdfPage() {
                 <div>Stran: {summary.totalPages} · Vytvořené listy: {summary.uploadCount}</div>
                 <div>
                   Vytvořené zakázky: {summary.createdJobs} / {summary.uploadCount}
+                </div>
+                <div className="mt-2">
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span>{summary.activeMessage || 'Stav zpracování'}</span>
+                    <span>{summary.progress}%</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-200">
+                    <div className="h-1.5 rounded-full bg-slate-900 transition-all" style={{ width: `${summary.progress}%` }} />
+                  </div>
                 </div>
               </div>
             ))}
@@ -256,6 +279,16 @@ export default function ImportPdfPage() {
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
                       {upload.processing_status || 'Zpracovává se'}
                     </span>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
+                    <span>{upload.processing_message || 'Stav zpracování není k dispozici'}</span>
+                    <span>{upload.processing_progress ?? 0}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-slate-200">
+                    <div className="h-2 rounded-full bg-slate-900 transition-all" style={{ width: `${upload.processing_progress ?? 0}%` }} />
                   </div>
                 </div>
 

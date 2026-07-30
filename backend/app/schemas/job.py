@@ -1,8 +1,15 @@
 from datetime import datetime
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+JOB_STATUSES = {
+    "Nová", "Vyžaduje kontrolu", "Klient nekontaktován", "Klient kontaktován",
+    "Čeká na termín", "Termín naplánován", "Probíhá realizace", "Dokončeno", "Zrušeno",
+    # Legacy API values remain valid for backward compatibility.
+    "new", "scheduled", "done", "cancelled",
+}
 
 
 class JobBase(BaseModel):
@@ -23,9 +30,8 @@ class JobBase(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, value: str) -> str:
-        allowed = {"new", "scheduled", "done", "cancelled"}
-        if value not in allowed:
-            raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
+        if value not in JOB_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(sorted(JOB_STATUSES))}")
         return value
 
     @field_validator("priority")
@@ -140,6 +146,8 @@ class JobAttachmentRead(BaseModel):
     page_number: int | None = None
     total_pages: int | None = None
     is_primary: bool = False
+    parsed_data: dict[str, Any] | None = None
+    error_message: str | None = None
 
 
 class JobAuditLogRead(BaseModel):
@@ -151,10 +159,43 @@ class JobAuditLogRead(BaseModel):
     created_at: datetime
 
 
+class JobStatusHistoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    previous_status: str | None
+    new_status: str
+    changed_at: datetime
+
+
+class JobNoteCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+
+
+class JobStatusUpdate(BaseModel):
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_job_status(cls, value: str) -> str:
+        if value not in JOB_STATUSES:
+            raise ValueError("Invalid job status")
+        return value
+
+
+class JobNoteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    text: str
+    created_at: datetime
+
+
 class JobDetailResponse(BaseModel):
     job: JobRead
+    customer: dict[str, Any] | None = None
     attachments: list[JobAttachmentRead]
     audit_logs: list[JobAuditLogRead]
+    status_history: list[JobStatusHistoryRead] = []
+    notes: list[JobNoteRead] = []
     primary_attachment_id: int | None = None
 
 

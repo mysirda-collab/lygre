@@ -73,6 +73,8 @@ async def upload_pdf(
             file_size=page_path.stat().st_size,
             status="Čeká",
             processing_status="WAITING",
+            processing_progress=0,
+            processing_message="Čeká na zpracování",
             source_document_id=source_document_id,
             source_original_filename=file.filename,
             source_stored_filename=source_stored_filename,
@@ -105,6 +107,8 @@ async def upload_pdf(
                 file_size=page_path.stat().st_size,
                 status="Čeká",
                 processing_status="WAITING",
+                processing_progress=0,
+                processing_message="Čeká na zpracování",
                 source_document_id=source_document_id,
                 source_original_filename=file.filename,
                 source_stored_filename=source_stored_filename,
@@ -115,9 +119,9 @@ async def upload_pdf(
             created_ids.append(upload.id)
 
             threading.Thread(
-            target=process_upload,
-            args=(upload.id, str(page_path)),
-            daemon=True,
+                target=process_upload,
+                args=(upload.id, str(page_path)),
+                daemon=True,
             ).start()
 
     return UploadCreateResponse(
@@ -169,6 +173,8 @@ def review_upload_job(
         updated = update_job(db=db, job=job, job_data=job_in.model_dump())
         upload.status = "Hotovo"
         upload.processing_status = "Hotovo"
+        upload.processing_progress = 100
+        upload.processing_message = "Ruční kontrola dokončena"
         db.add(upload)
         db.commit()
         db.refresh(upload)
@@ -182,6 +188,8 @@ def review_upload_job(
     upload.job_id = created.id
     upload.status = "Hotovo"
     upload.processing_status = "Hotovo"
+    upload.processing_progress = 100
+    upload.processing_message = "Ruční kontrola dokončena"
     db.add(upload)
     db.commit()
     db.refresh(upload)

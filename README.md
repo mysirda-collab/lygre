@@ -130,7 +130,11 @@ Speciální parser pro zakázkové listy extrahuje tato pole:
 - ID objednávky,
 - typ objednávky.
 
-Pokud OCR selže nebo chybí povinná pole, upload zůstane ve stavu vyžadujícím ruční kontrolu (nevytvoří se automaticky zakázka).
+Pokud OCR selže nebo chybí povinná pole, dokument se neztratí: vznikne dohledatelný upload, zákazník a zakázka ve stavu `Vyžaduje kontrolu` s validačními varováními v parsovaném payloadu.
+
+Volitelnou provider-neutrální AI extrakci lze zapnout pomocí `AI_EXTRACTION_ENABLED=true` a `AI_EXTRACTION_ENDPOINT`. Tajný token lze předat přes `AI_EXTRACTION_API_KEY`; ve výchozím stavu je AI vypnutá a její výpadek import nezastaví.
+
+Zakázky podporují český produkční workflow stavů, auditovanou historii změn a samostatné časované poznámky. Detail zakázky zobrazuje zákazníka, historii, poznámky, zdrojové PDF a uložená parsovaná data.
 
 ### OCR závislosti
 
