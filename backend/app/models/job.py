@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
-from sqlalchemy import Boolean, DateTime, String, Integer, Float, ForeignKey
+from sqlalchemy import Boolean, DateTime, String, Integer, Float, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship
 
@@ -39,4 +39,27 @@ class Job(Base):
     customer = relationship("Customer", back_populates="jobs")
     reservations = relationship("Reservation", back_populates="job")
     sms_logs = relationship("SmsLog", back_populates="job")
+    status_history = relationship("JobStatusHistory", back_populates="job", cascade="all, delete-orphan")
+    note_entries = relationship("JobNote", back_populates="job", cascade="all, delete-orphan")
     # Attachment link removed to prefer single-direction relation via Upload.job_id
+
+
+class JobStatusHistory(Base):
+    __tablename__ = "job_status_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    previous_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    job = relationship("Job", back_populates="status_history")
+
+
+class JobNote(Base):
+    __tablename__ = "job_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    job = relationship("Job", back_populates="note_entries")

@@ -6,7 +6,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
-from app.models.job import Job
+from app.models.job import Job, JobNote, JobStatusHistory
 from app.models.reservation import Reservation
 from app.models.time_slot import TimeSlot
 from app.models.upload import Upload
@@ -16,7 +16,7 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-VALID_STATUSES = {"new", "scheduled", "done", "cancelled"}
+VALID_STATUSES = {"new", "scheduled", "done", "cancelled", "Nová", "Vyžaduje kontrolu", "Klient nekontaktován", "Klient kontaktován", "Čeká na termín", "Termín naplánován", "Probíhá realizace", "Dokončeno", "Zrušeno"}
 VALID_SORT_FIELDS = {"job_number", "customer_name", "installation_date", "created_at", "updated_at"}
 VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 
@@ -28,6 +28,7 @@ def _apply_filters(
     priority: str | None,
     technician: str | None,
     customer: str | None,
+    customer_id: int | None,
     installation_date_from: datetime | None,
     installation_date_to: datetime | None,
     search: str | None,
@@ -44,6 +45,8 @@ def _apply_filters(
         filters.append(Job.technician.ilike(f"%{technician}%"))
     if customer:
         filters.append(Job.customer_name.ilike(f"%{customer}%"))
+    if customer_id is not None:
+        filters.append(Job.customer_id == customer_id)
     if installation_date_from:
         filters.append(Job.installation_date >= installation_date_from)
     if installation_date_to:
@@ -74,6 +77,7 @@ def get_jobs(
     priority: str | None = None,
     technician: str | None = None,
     customer: str | None = None,
+    customer_id: int | None = None,
     installation_date_from: datetime | None = None,
     installation_date_to: datetime | None = None,
     search: str | None = None,
@@ -86,6 +90,7 @@ def get_jobs(
         priority=priority,
         technician=technician,
         customer=customer,
+        customer_id=customer_id,
         installation_date_from=installation_date_from,
         installation_date_to=installation_date_to,
         search=search,
@@ -102,6 +107,7 @@ def get_jobs(
         priority=priority,
         technician=technician,
         customer=customer,
+        customer_id=customer_id,
         installation_date_from=installation_date_from,
         installation_date_to=installation_date_to,
         search=search,
@@ -123,19 +129,32 @@ def get_job_by_number(db: Session, job_number: str) -> Job | None:
 def create_job(db: Session, job_data: dict[str, Any]) -> Job:
     job = Job(**job_data)
     db.add(job)
+    db.flush()
+    db.add(JobStatusHistory(job_id=job.id, previous_status=None, new_status=job.status))
     db.commit()
     db.refresh(job)
     return job
 
 
 def update_job(db: Session, job: Job, job_data: dict[str, Any]) -> Job:
+    previous_status = job.status
     for key, value in job_data.items():
         setattr(job, key, value)
     job.updated_at = utc_now()
     db.add(job)
+    if "status" in job_data and job.status != previous_status:
+        db.add(JobStatusHistory(job_id=job.id, previous_status=previous_status, new_status=job.status))
     db.commit()
     db.refresh(job)
     return job
+
+
+def add_job_note(db: Session, job_id: int, text: str) -> JobNote:
+    note = JobNote(job_id=job_id, text=text.strip())
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
 
 
 def delete_job(db: Session, job: Job) -> None:
@@ -243,10 +262,10 @@ def get_dashboard_summary(db: Session) -> dict[str, Any]:
     }
 
 
-def get_job_detail_data(db: Session, job_id: int) -> tuple[Job | None, list[Upload], list[AuditLog]]:
+def get_job_detail_data(db: Session, job_id: int) -> tuple[Job | None, list[Upload], list[AuditLog], list[JobStatusHistory], list[JobNote]]:
     job = get_job_by_id(db, job_id)
     if not job:
-        return None, [], []
+        return None, [], [], [], []
 
     attachments = db.scalars(
         select(Upload)
@@ -258,4 +277,6 @@ def get_job_detail_data(db: Session, job_id: int) -> tuple[Job | None, list[Uplo
         .where(AuditLog.entity_type == "job", AuditLog.entity_id == job_id)
         .order_by(AuditLog.created_at.desc())
     ).all()
-    return job, list(attachments), list(audit_logs)
+    history = db.scalars(select(JobStatusHistory).where(JobStatusHistory.job_id == job_id).order_by(JobStatusHistory.changed_at.desc())).all()
+    notes = db.scalars(select(JobNote).where(JobNote.job_id == job_id).order_by(JobNote.created_at.desc())).all()
+    return job, list(attachments), list(audit_logs), list(history), list(notes)
