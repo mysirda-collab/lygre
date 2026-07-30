@@ -56,6 +56,15 @@ def get_upload_by_id(db: Session, upload_id: int) -> Upload | None:
     return db.get(Upload, upload_id)
 
 
+def get_first_waiting_upload(db: Session) -> Upload | None:
+    return db.scalar(
+        select(Upload)
+        .where(Upload.processing_status == "WAITING")
+        .order_by(Upload.uploaded_at.asc(), Upload.id.asc())
+        .limit(1)
+    )
+
+
 def update_upload(db: Session, upload: Upload, **kwargs: object) -> Upload:
     for key, value in kwargs.items():
         setattr(upload, key, value)
